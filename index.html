@@ -1,0 +1,1226 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Calculateur ROI Copieurs</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <style>
+      input[type=number]::-webkit-outer-spin-button,
+      input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+      input[type=number] { -moz-appearance: textfield; }
+      body { font-family: ui-sans-serif, system-ui, sans-serif; }
+
+      /* PDF export styles */
+      #pdf-export-container {
+        position: fixed;
+        top: -10000px;
+        left: 0;
+        width: 794px; /* ~A4 width at 96dpi */
+        background: white;
+        padding: 30px;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="pdf-export-container"></div>
+
+    <script type="text/babel">
+      const { useState, useEffect, useRef } = React;
+
+      /* ---------------- Storage ---------------- */
+      const STORAGE_KEY = "calculateur-copieurs-state-v3";
+      const SASP_LIST_KEY = "calculateur-copieurs-sasp-list-v1";
+      const CURRENT_SASP_ID_KEY = "calculateur-copieurs-current-sasp-id";
+
+      const loadState = () => {
+        try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : null; }
+        catch { return null; }
+      };
+      const saveState = (copiers, mode, period) => {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ copiers, mode, period })); } catch {}
+      };
+
+      const loadSaspList = () => {
+        try { const raw = localStorage.getItem(SASP_LIST_KEY); return raw ? JSON.parse(raw) : []; }
+        catch { return []; }
+      };
+      const saveSaspList = (list) => {
+        try { localStorage.setItem(SASP_LIST_KEY, JSON.stringify(list)); } catch {}
+      };
+      const loadCurrentSaspId = () => {
+        try { return localStorage.getItem(CURRENT_SASP_ID_KEY); }
+        catch { return null; }
+      };
+      const saveCurrentSaspId = (id) => {
+        try {
+          if (id) localStorage.setItem(CURRENT_SASP_ID_KEY, id);
+          else localStorage.removeItem(CURRENT_SASP_ID_KEY);
+        } catch {}
+      };
+
+      const generateId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+      /* ---------------- Format ---------------- */
+      const formatEUR = (n) => new Intl.NumberFormat("fr-FR", { style:"currency", currency:"EUR", minimumFractionDigits:2 }).format(n || 0);
+      const formatInt = (n) => (n || 0).toLocaleString("fr-FR");
+      const formatDate = (d) => new Intl.DateTimeFormat("fr-FR", { day:"2-digit", month:"2-digit", year:"numeric" }).format(d);
+
+      /* ---------------- Periodicity ---------------- */
+      const PERIODS = [
+        { id:"monthly",   label:"Mensuel",     factor:1,  unit:"/mois",      noun:"par mois",      usageLabel:"Mensuelle",     usageSuffix:"/ mois" },
+        { id:"quarterly", label:"Trimestriel", factor:3,  unit:"/trimestre", noun:"par trimestre", usageLabel:"Trimestrielle", usageSuffix:"/ trimestre" },
+        { id:"annual",    label:"Annuel",      factor:12, unit:"/an",        noun:"par an",        usageLabel:"Annuelle",      usageSuffix:"/ an" },
+      ];
+      const getPeriod = (id) => PERIODS.find(p => p.id === id) || PERIODS[0];
+
+      /* ---------------- Calculations ---------------- */
+      function calcMonthly(sol, use) {
+        const extraBW    = Math.max(0, use.bwCopies   - sol.packageBW);
+        const extraColor = Math.max(0, use.colorCopies - sol.packageColor);
+        const extraBWCost    = extraBW    * sol.costPerExtraBW;
+        const extraColorCost = extraColor * sol.costPerExtraColor;
+        const basePackageCost = sol.packageFixedCost;
+        const rentCost = sol.rent;
+        const monthlyTotal = rentCost + basePackageCost + extraBWCost + extraColorCost;
+        return { monthlyTotal, annualTotal: monthlyTotal*12, basePackageCost, extraBWCost, extraColorCost, rentCost };
+      }
+      function compare(current, proposed, use) {
+        const c = calcMonthly(current,  use);
+        const p = calcMonthly(proposed, use);
+        const monthlySavings = c.monthlyTotal - p.monthlyTotal;
+        return {
+          current:c, proposed:p,
+          monthlySavings,
+          annualSavings: monthlySavings*12,
+          savingsPercentage: c.monthlyTotal>0 ? (monthlySavings/c.monthlyTotal)*100 : 0,
+        };
+      }
+
+      /* ---------------- Default data ---------------- */
+      const DEFAULT_COPIERS = [{
+        id:"1",
+        name:"Copieur Principal",
+        current:  { rent:100, packageBW:500, packageColor:200, packageFixedCost:50, costPerExtraBW:0.01,  costPerExtraColor:0.05  },
+        proposed: { rent: 80, packageBW:600, packageColor:300, packageFixedCost:40, costPerExtraBW:0.008, costPerExtraColor:0.045 },
+        bwCopies:1000, colorCopies:500,
+      }];
+
+      /* ---------------- Icons ---------------- */
+      const I = {
+        calc:    (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="16" height="20" x="4" y="2" rx="2"/><line x1="8" x2="16" y1="6" y2="6"/><line x1="16" x2="16" y1="14" y2="18"/><path d="M16 10h.01"/><path d="M12 10h.01"/><path d="M8 10h.01"/><path d="M12 14h.01"/><path d="M8 14h.01"/><path d="M12 18h.01"/><path d="M8 18h.01"/></svg>,
+        swap:    (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/></svg>,
+        layers:  (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>,
+        plus:    (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>,
+        trash:   (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>,
+        check:   (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>,
+        file:    (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>,
+        save:    (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>,
+        download:(p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>,
+        folder:  (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 19a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 2H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>,
+        edit:    (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
+        copy:    (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>,
+        x:       (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg>,
+        menu:    (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>,
+      };
+
+      /* ---------------- Number input ---------------- */
+      function NumberField({ label, value, onChange, step=1 }) {
+        return (
+          <div>
+            <label className="text-xs text-gray-600 mb-1 block">{label}</label>
+            <input
+              type="number"
+              step={step}
+              value={Number.isFinite(value) ? value : 0}
+              onChange={(e)=>onChange(parseFloat(e.target.value)||0)}
+              className="w-full border border-gray-300 rounded px-2 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1"
+            />
+          </div>
+        );
+      }
+
+      /* ---------------- Solution Editor ---------------- */
+      function SolutionEditor({ title, color, solution, onChange, period }) {
+        const set = (k) => (v) => onChange({ ...solution, [k]: v });
+        const f = period.factor;
+        const colorClasses = {
+          red:    "bg-white rounded-lg p-6 shadow-sm border-2 border-red-200",
+          green:  "bg-white rounded-lg p-6 shadow-sm border-2 border-green-200",
+          indigo: "bg-white rounded-lg p-6 shadow-sm border-2 border-indigo-200",
+        };
+        const titleColor = {
+          red: "text-red-700", green: "text-green-700", indigo: "text-indigo-700",
+        };
+        return (
+          <div className={colorClasses[color]}>
+            <h3 className={`font-semibold mb-4 ${titleColor[color]}`}>{title}</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <NumberField label={`Loyer (€) ${period.usageSuffix}`}        value={solution.rent * f}              onChange={(v)=>set("rent")(v / f)}             step={0.01} />
+              <NumberField label={`Forfait fixe (€) ${period.usageSuffix}`} value={solution.packageFixedCost * f}  onChange={(v)=>set("packageFixedCost")(v / f)} step={0.01} />
+              <NumberField label={`Copies N&B incluses ${period.usageSuffix}`}     value={Math.round(solution.packageBW * f)}    onChange={(v)=>set("packageBW")(v / f)} />
+              <NumberField label={`Copies Couleur incluses ${period.usageSuffix}`} value={Math.round(solution.packageColor * f)} onChange={(v)=>set("packageColor")(v / f)} />
+              <NumberField label="€ / page N&B supp."     value={solution.costPerExtraBW}    onChange={set("costPerExtraBW")}    step={0.001} />
+              <NumberField label="€ / page Couleur supp." value={solution.costPerExtraColor} onChange={set("costPerExtraColor")} step={0.001} />
+            </div>
+          </div>
+        );
+      }
+
+      /* ---------------- Cost detail ---------------- */
+      function CostDetail({ result, period, accent }) {
+        const f = period.factor;
+        const rowBg = accent === "indigo" ? "flex justify-between bg-indigo-50 p-2 rounded" : "flex justify-between bg-gray-50 p-2 rounded";
+        return (
+          <div className="space-y-2 text-sm">
+            <div className={rowBg}>
+              <span className="text-gray-700">Loyer</span>
+              <span className="font-medium text-gray-900">{formatEUR(result.rentCost * f)}</span>
+            </div>
+            <div className={rowBg}>
+              <span className="text-gray-700">Forfait fixe</span>
+              <span className="font-medium text-gray-900">{formatEUR(result.basePackageCost * f)}</span>
+            </div>
+            <div className={rowBg}>
+              <span className="text-gray-700">N&B supplémentaires</span>
+              <span className="font-medium text-gray-900">{formatEUR(result.extraBWCost * f)}</span>
+            </div>
+            <div className={rowBg}>
+              <span className="text-gray-700">Couleur supplémentaires</span>
+              <span className="font-medium text-gray-900">{formatEUR(result.extraColorCost * f)}</span>
+            </div>
+          </div>
+        );
+      }
+
+      /* ---------------- Copier card ---------------- */
+      function CopierCard({ copier, mode, period, onChange, onDelete, canDelete }) {
+        const usage = { bwCopies: copier.bwCopies, colorCopies: copier.colorCopies };
+        const cmp    = mode === "comparison" ? compare(copier.current, copier.proposed, usage) : null;
+        const simple = mode === "simple"     ? calcMonthly(copier.proposed, usage) : null;
+
+        const setKey = (k) => (v) => onChange({ ...copier, [k]: v });
+        const setSol = (k) => (s) => onChange({ ...copier, [k]: s });
+        const f = period.factor;
+
+        return (
+          <div className={`bg-white rounded-xl shadow-md p-6 border-l-4 ${mode==="comparison" ? "border-indigo-500" : "border-blue-500"} mb-6`}>
+            <div className="flex justify-between items-center mb-6">
+              <input
+                value={copier.name}
+                onChange={(e)=>onChange({ ...copier, name: e.target.value })}
+                placeholder="Nom du copieur"
+                className="text-xl font-bold bg-transparent border-b border-gray-300 focus:border-blue-500 focus:outline-none px-2 py-1 flex-1"
+              />
+              {canDelete && (
+                <button
+                  onClick={onDelete}
+                  className="text-red-500 hover:text-red-700 hover:bg-red-50 p-2 rounded-lg transition ml-3"
+                  title="Supprimer ce copieur"
+                >
+                  <I.trash className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+
+            <div className="bg-blue-50 rounded-lg p-4 mb-6">
+              <h3 className="font-semibold text-blue-900 mb-3">Utilisation {period.usageLabel}</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <NumberField
+                  label={`Copies N&B ${period.usageSuffix}`}
+                  value={Math.round(copier.bwCopies * f)}
+                  onChange={(v)=>setKey("bwCopies")(v / f)}
+                />
+                <NumberField
+                  label={`Copies Couleur ${period.usageSuffix}`}
+                  value={Math.round(copier.colorCopies * f)}
+                  onChange={(v)=>setKey("colorCopies")(v / f)}
+                />
+              </div>
+              {period.id !== "monthly" && (
+                <p className="text-xs text-blue-700 mt-3">
+                  Équivalent mensuel : {formatInt(Math.round(copier.bwCopies))} pages N&B · {formatInt(Math.round(copier.colorCopies))} pages couleur par mois.
+                </p>
+              )}
+            </div>
+
+            <div className={`grid grid-cols-1 ${mode==="comparison" ? "md:grid-cols-2" : ""} gap-4 mb-6`}>
+              {mode==="comparison" && (
+                <SolutionEditor title="Solution Actuelle"  color="red"   solution={copier.current}  onChange={setSol("current")}  period={period} />
+              )}
+              <SolutionEditor
+                title={mode==="comparison" ? "Solution Proposée" : "Votre Solution"}
+                color={mode==="comparison" ? "green" : "indigo"}
+                solution={copier.proposed}
+                onChange={setSol("proposed")}
+                period={period}
+              />
+            </div>
+
+            <div className="mt-6">
+              <h3 className="font-semibold text-gray-900 mb-3">Détail des coûts</h3>
+              {mode === "comparison" ? (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="bg-red-50 rounded-lg p-4 border border-red-200">
+                    <p className="text-sm text-gray-600 mb-2">Actuel{period.unit}</p>
+                    <p className="text-2xl font-bold text-red-600 mb-4">{formatEUR(cmp.current.monthlyTotal * f)}</p>
+                    <CostDetail result={cmp.current} period={period} />
+                  </div>
+                  <div className="bg-white rounded-lg p-6 shadow-sm border-2 border-green-300">
+                    <p className="text-sm text-gray-600 mb-2">Proposé{period.unit}</p>
+                    <p className="text-2xl font-bold text-green-700 mb-4">{formatEUR(cmp.proposed.monthlyTotal * f)}</p>
+                    <CostDetail result={cmp.proposed} period={period} />
+                  </div>
+                  <div className="bg-white rounded-lg p-6 shadow-sm border-2 border-indigo-200">
+                    <p className="text-sm text-gray-600 mb-2">Économies{period.unit}</p>
+                    <p className={`text-2xl font-bold mb-1 ${cmp.monthlySavings>=0 ? "text-indigo-700" : "text-red-600"}`}>
+                      {formatEUR(cmp.monthlySavings * f)}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1">{cmp.savingsPercentage.toFixed(1)} % par rapport à l'actuel</p>
+                    <div className="mt-4 pt-3 border-t border-gray-200 text-sm space-y-1">
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Sur 12 mois</span>
+                        <span className="font-bold text-indigo-700">{formatEUR(cmp.annualSavings)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-white rounded-lg p-6 shadow-sm border-2 border-indigo-100">
+                  <p className="text-sm text-gray-600 mb-2">Coût {period.label.toLowerCase()}</p>
+                  <p className="text-2xl font-bold text-indigo-700 mb-4">{formatEUR(simple.monthlyTotal * f)}</p>
+                  <CostDetail result={simple} period={period} accent="indigo" />
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      /* ---------------- Global summary ---------------- */
+      function GlobalSummary({ copiers, mode, period }) {
+        const f = period.factor;
+        const totals = copiers.reduce((acc, c) => {
+          const u = { bwCopies: c.bwCopies, colorCopies: c.colorCopies };
+          if (mode === "comparison") {
+            const cmp = compare(c.current, c.proposed, u);
+            acc.current  += cmp.current.monthlyTotal;
+            acc.proposed += cmp.proposed.monthlyTotal;
+          } else {
+            const s = calcMonthly(c.proposed, u);
+            acc.proposed += s.monthlyTotal;
+          }
+          acc.bw    += c.bwCopies;
+          acc.color += c.colorCopies;
+          return acc;
+        }, { current:0, proposed:0, bw:0, color:0 });
+
+        const savings = totals.current - totals.proposed;
+        const pct = totals.current > 0 ? (savings / totals.current) * 100 : 0;
+
+        if (mode === "comparison") {
+          return (
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+              <div className="bg-white rounded-lg p-6 shadow-sm border-2 border-indigo-100">
+                <p className="text-gray-600 text-sm">Coût Actuel{period.unit}</p>
+                <p className="text-2xl font-bold text-red-600">{formatEUR(totals.current * f)}</p>
+                <p className="text-xs text-gray-500 mt-1">{formatInt(totals.bw * f)} N&B · {formatInt(totals.color * f)} couleur</p>
+              </div>
+              <div className="bg-white rounded-lg p-6 shadow-sm border-2 border-green-200">
+                <p className="text-gray-600 text-sm">Coût Proposé{period.unit}</p>
+                <p className="text-2xl font-bold text-green-700">{formatEUR(totals.proposed * f)}</p>
+                <p className="text-xs text-gray-500 mt-1">{period.noun}</p>
+              </div>
+              <div className="bg-white rounded-lg p-6 shadow-sm border-2 border-indigo-200">
+                <p className="text-gray-600 text-sm">Économies{period.unit}</p>
+                <p className={`text-2xl font-bold ${savings>=0 ? "text-indigo-700" : "text-red-600"}`}>{formatEUR(savings * f)}</p>
+                <p className="text-xs text-gray-500 mt-1">{pct.toFixed(1)} %</p>
+              </div>
+              <div className="bg-white rounded-lg p-6 shadow-sm border-2 border-green-300">
+                <p className="text-gray-600 text-sm">Économies Annuelles</p>
+                <p className="text-2xl font-bold text-green-600">{formatEUR(savings * 12)}</p>
+                <p className="text-xs text-gray-500 mt-1">Sur 12 mois</p>
+              </div>
+            </div>
+          );
+        }
+
+        const avg = copiers.length > 0 ? totals.proposed / copiers.length : 0;
+        return (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div className="bg-white rounded-lg p-6 shadow-sm border-2 border-indigo-200">
+              <p className="text-gray-600 text-sm">Coût Total{period.unit}</p>
+              <p className="text-2xl font-bold text-indigo-700">{formatEUR(totals.proposed * f)}</p>
+              <p className="text-xs text-gray-500 mt-1">{formatInt(totals.bw * f)} N&B · {formatInt(totals.color * f)} couleur</p>
+            </div>
+            <div className="bg-white rounded-lg p-6 shadow-sm border-2 border-green-200">
+              <p className="text-gray-600 text-sm">Coût Annuel Total</p>
+              <p className="text-2xl font-bold text-green-700">{formatEUR(totals.proposed * 12)}</p>
+              <p className="text-xs text-gray-500 mt-1">Sur 12 mois</p>
+            </div>
+            <div className="bg-white rounded-lg p-6 shadow-sm border-2 border-indigo-100">
+              <p className="text-gray-600 text-sm">Coût Moyen / Copieur</p>
+              <p className="text-2xl font-bold text-gray-700">{formatEUR(avg * f)}</p>
+              <p className="text-xs text-gray-500 mt-1">{period.noun}</p>
+            </div>
+          </div>
+        );
+      }
+
+      /* ---------------- Recap table ---------------- */
+      function RecapTable({ copiers, mode, period }) {
+        const f = period.factor;
+        return (
+          <div className="bg-white rounded-xl shadow-md p-6 mb-8">
+            <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <I.file className="w-5 h-5 text-indigo-600" />
+              Détail par Copieur
+            </h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-300">
+                    <th className="text-left py-3 px-4 font-semibold text-gray-700">Copieur</th>
+                    <th className="text-right py-3 px-4 font-semibold text-gray-700">N&B</th>
+                    <th className="text-right py-3 px-4 font-semibold text-gray-700">Couleur</th>
+                    {mode==="comparison" && <th className="text-right py-3 px-4 font-semibold text-gray-700">Actuel{period.unit}</th>}
+                    <th className="text-right py-3 px-4 font-semibold text-green-700">{mode==="comparison" ? `Proposé${period.unit}` : `Coût${period.unit}`}</th>
+                    {mode==="comparison" && <th className="text-right py-3 px-4 font-semibold text-indigo-700">Économies{period.unit}</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {copiers.map((c) => {
+                    const u = { bwCopies:c.bwCopies, colorCopies:c.colorCopies };
+                    if (mode === "comparison") {
+                      const r = compare(c.current, c.proposed, u);
+                      return (
+                        <tr key={c.id} className="border-b border-gray-200 hover:bg-gray-50">
+                          <td className="py-3 px-4 font-medium text-gray-900">{c.name}</td>
+                          <td className="text-right py-3 px-4 text-gray-600">{formatInt(c.bwCopies * f)}</td>
+                          <td className="text-right py-3 px-4 text-gray-600">{formatInt(c.colorCopies * f)}</td>
+                          <td className="text-right py-3 px-4 text-red-600">{formatEUR(r.current.monthlyTotal * f)}</td>
+                          <td className="text-right py-3 px-4 text-green-700">{formatEUR(r.proposed.monthlyTotal * f)}</td>
+                          <td className={`text-right py-3 px-4 font-semibold ${r.monthlySavings>=0 ? "text-indigo-700" : "text-red-700"}`}>{formatEUR(r.monthlySavings * f)}</td>
+                        </tr>
+                      );
+                    }
+                    const s = calcMonthly(c.proposed, u);
+                    return (
+                      <tr key={c.id} className="border-b border-gray-200 hover:bg-gray-50">
+                        <td className="py-3 px-4 font-medium text-gray-900">{c.name}</td>
+                        <td className="text-right py-3 px-4 text-gray-600">{formatInt(c.bwCopies * f)}</td>
+                        <td className="text-right py-3 px-4 text-gray-600">{formatInt(c.colorCopies * f)}</td>
+                        <td className="text-right py-3 px-4 text-indigo-700 font-semibold">{formatEUR(s.monthlyTotal * f)}</td>
+                      </tr>
+                    );
+                  })}
+                  {(() => {
+                    const totals = copiers.reduce((acc, c) => {
+                      const u = { bwCopies:c.bwCopies, colorCopies:c.colorCopies };
+                      acc.bw += c.bwCopies; acc.color += c.colorCopies;
+                      if (mode==="comparison") {
+                        const r = compare(c.current, c.proposed, u);
+                        acc.current += r.current.monthlyTotal;
+                        acc.proposed += r.proposed.monthlyTotal;
+                      } else {
+                        acc.proposed += calcMonthly(c.proposed, u).monthlyTotal;
+                      }
+                      return acc;
+                    }, { bw:0, color:0, current:0, proposed:0 });
+                    const sav = totals.current - totals.proposed;
+                    return (
+                      <tr className="bg-blue-50 font-bold">
+                        <td className="py-3 px-4 font-medium text-gray-900">TOTAL</td>
+                        <td className="text-right py-3 px-4 text-gray-900">{formatInt(totals.bw * f)}</td>
+                        <td className="text-right py-3 px-4 text-gray-900">{formatInt(totals.color * f)}</td>
+                        {mode==="comparison" && <td className="text-right py-3 px-4 text-red-700">{formatEUR(totals.current * f)}</td>}
+                        <td className="text-right py-3 px-4 text-green-700">{formatEUR(totals.proposed * f)}</td>
+                        {mode==="comparison" && <td className={`text-right py-3 px-4 ${sav>=0 ? "text-indigo-700" : "text-red-700"}`}>{formatEUR(sav * f)}</td>}
+                      </tr>
+                    );
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      }
+
+      /* ---------------- SASP Sidebar ---------------- */
+      function SaspSidebar({ open, onClose, saspList, currentSaspId, currentName, onLoad, onNew, onDuplicate, onRename, onDelete }) {
+        const [renamingId, setRenamingId] = useState(null);
+        const [tempName, setTempName] = useState("");
+
+        const startRename = (sasp) => {
+          setRenamingId(sasp.id);
+          setTempName(sasp.name);
+        };
+        const commitRename = () => {
+          if (renamingId && tempName.trim()) onRename(renamingId, tempName.trim());
+          setRenamingId(null);
+          setTempName("");
+        };
+
+        return (
+          <>
+            {open && <div className="fixed inset-0 bg-black/30 z-40" onClick={onClose} />}
+            <aside className={`fixed top-0 left-0 h-full w-80 bg-white shadow-2xl z-50 transform transition-transform ${open ? "translate-x-0" : "-translate-x-full"}`}>
+              <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+                <h2 className="font-bold text-lg text-gray-900 flex items-center gap-2">
+                  <I.folder className="w-5 h-5 text-indigo-600" />
+                  Mes SASP
+                </h2>
+                <button onClick={onClose} className="text-gray-500 hover:text-gray-700 p-1 rounded">
+                  <I.x className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-4 border-b border-gray-200">
+                <button
+                  onClick={onNew}
+                  className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-3 py-2 rounded-lg transition text-sm"
+                >
+                  <I.plus className="w-4 h-4" />
+                  Nouveau SASP
+                </button>
+              </div>
+
+              <div className="overflow-y-auto" style={{ maxHeight: "calc(100vh - 140px)" }}>
+                {saspList.length === 0 ? (
+                  <p className="p-6 text-sm text-gray-500 text-center">
+                    Aucun SASP enregistré pour le moment. Modifiez les valeurs et cliquez sur « Enregistrer » pour créer votre premier SASP.
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-gray-100">
+                    {saspList.map((sasp) => {
+                      const isActive = sasp.id === currentSaspId;
+                      return (
+                        <li key={sasp.id} className={`p-3 ${isActive ? "bg-indigo-50" : "hover:bg-gray-50"}`}>
+                          {renamingId === sasp.id ? (
+                            <div className="flex gap-1">
+                              <input
+                                autoFocus
+                                value={tempName}
+                                onChange={(e)=>setTempName(e.target.value)}
+                                onKeyDown={(e)=>{ if (e.key==="Enter") commitRename(); if (e.key==="Escape") setRenamingId(null); }}
+                                className="flex-1 border border-indigo-300 rounded px-2 py-1 text-sm focus:outline-none focus:border-indigo-500"
+                              />
+                              <button onClick={commitRename} className="text-green-600 hover:text-green-700 px-2 text-xs font-semibold">OK</button>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex items-center justify-between gap-2">
+                                <button
+                                  onClick={()=>onLoad(sasp.id)}
+                                  className={`flex-1 text-left font-medium text-sm truncate ${isActive ? "text-indigo-700" : "text-gray-900 hover:text-indigo-700"}`}
+                                  title={sasp.name}
+                                >
+                                  {sasp.name}
+                                  {isActive && <span className="ml-2 text-[10px] uppercase tracking-wide bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">actif</span>}
+                                </button>
+                              </div>
+                              <p className="text-xs text-gray-500 mt-0.5">
+                                {sasp.data.copiers?.length || 0} copieur(s) · modifié le {formatDate(new Date(sasp.updatedAt))}
+                              </p>
+                              <div className="flex gap-1 mt-2">
+                                <button
+                                  onClick={()=>onLoad(sasp.id)}
+                                  className="text-xs text-indigo-700 hover:bg-indigo-100 px-2 py-1 rounded font-medium"
+                                  title="Charger"
+                                >
+                                  Charger
+                                </button>
+                                <button
+                                  onClick={()=>startRename(sasp)}
+                                  className="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded inline-flex items-center gap-1"
+                                  title="Renommer"
+                                >
+                                  <I.edit className="w-3 h-3" /> Renommer
+                                </button>
+                                <button
+                                  onClick={()=>onDuplicate(sasp.id)}
+                                  className="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded inline-flex items-center gap-1"
+                                  title="Dupliquer"
+                                >
+                                  <I.copy className="w-3 h-3" /> Copier
+                                </button>
+                                <button
+                                  onClick={()=>{
+                                    if (confirm(`Supprimer le SASP « ${sasp.name} » ?`)) onDelete(sasp.id);
+                                  }}
+                                  className="text-xs text-red-600 hover:bg-red-50 px-2 py-1 rounded inline-flex items-center gap-1 ml-auto"
+                                  title="Supprimer"
+                                >
+                                  <I.trash className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </aside>
+          </>
+        );
+      }
+
+      /* ---------------- PDF Export Component (compact summary + recap) ---------------- */
+      function buildPdfHtml({ saspName, copiers, mode, period, exportDate }) {
+        const f = period.factor;
+        const periodObj = period;
+
+        // Compute totals
+        const totals = copiers.reduce((acc, c) => {
+          const u = { bwCopies: c.bwCopies, colorCopies: c.colorCopies };
+          if (mode === "comparison") {
+            const cmp = compare(c.current, c.proposed, u);
+            acc.current  += cmp.current.monthlyTotal;
+            acc.proposed += cmp.proposed.monthlyTotal;
+          } else {
+            const s = calcMonthly(c.proposed, u);
+            acc.proposed += s.monthlyTotal;
+          }
+          acc.bw    += c.bwCopies;
+          acc.color += c.colorCopies;
+          return acc;
+        }, { current:0, proposed:0, bw:0, color:0 });
+
+        const savings = totals.current - totals.proposed;
+        const pct = totals.current > 0 ? (savings / totals.current) * 100 : 0;
+
+        // Build summary cards HTML
+        let summaryHtml = "";
+        if (mode === "comparison") {
+          summaryHtml = `
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;">
+              <div style="background:white;border:2px solid #e0e7ff;border-radius:8px;padding:14px;">
+                <p style="color:#6b7280;font-size:11px;margin:0 0 4px 0;">Coût Actuel${periodObj.unit}</p>
+                <p style="color:#dc2626;font-size:18px;font-weight:bold;margin:0;">${formatEUR(totals.current * f)}</p>
+                <p style="color:#6b7280;font-size:10px;margin:4px 0 0 0;">${formatInt(totals.bw * f)} N&B · ${formatInt(totals.color * f)} couleur</p>
+              </div>
+              <div style="background:white;border:2px solid #bbf7d0;border-radius:8px;padding:14px;">
+                <p style="color:#6b7280;font-size:11px;margin:0 0 4px 0;">Coût Proposé${periodObj.unit}</p>
+                <p style="color:#15803d;font-size:18px;font-weight:bold;margin:0;">${formatEUR(totals.proposed * f)}</p>
+                <p style="color:#6b7280;font-size:10px;margin:4px 0 0 0;">${periodObj.noun}</p>
+              </div>
+              <div style="background:white;border:2px solid #c7d2fe;border-radius:8px;padding:14px;">
+                <p style="color:#6b7280;font-size:11px;margin:0 0 4px 0;">Économies${periodObj.unit}</p>
+                <p style="color:${savings>=0 ? "#4338ca" : "#dc2626"};font-size:18px;font-weight:bold;margin:0;">${formatEUR(savings * f)}</p>
+                <p style="color:#6b7280;font-size:10px;margin:4px 0 0 0;">${pct.toFixed(1)} %</p>
+              </div>
+              <div style="background:white;border:2px solid #86efac;border-radius:8px;padding:14px;">
+                <p style="color:#6b7280;font-size:11px;margin:0 0 4px 0;">Économies Annuelles</p>
+                <p style="color:#16a34a;font-size:18px;font-weight:bold;margin:0;">${formatEUR(savings * 12)}</p>
+                <p style="color:#6b7280;font-size:10px;margin:4px 0 0 0;">Sur 12 mois</p>
+              </div>
+            </div>
+          `;
+        } else {
+          const avg = copiers.length > 0 ? totals.proposed / copiers.length : 0;
+          summaryHtml = `
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;">
+              <div style="background:white;border:2px solid #c7d2fe;border-radius:8px;padding:14px;">
+                <p style="color:#6b7280;font-size:11px;margin:0 0 4px 0;">Coût Total${periodObj.unit}</p>
+                <p style="color:#4338ca;font-size:18px;font-weight:bold;margin:0;">${formatEUR(totals.proposed * f)}</p>
+                <p style="color:#6b7280;font-size:10px;margin:4px 0 0 0;">${formatInt(totals.bw * f)} N&B · ${formatInt(totals.color * f)} couleur</p>
+              </div>
+              <div style="background:white;border:2px solid #bbf7d0;border-radius:8px;padding:14px;">
+                <p style="color:#6b7280;font-size:11px;margin:0 0 4px 0;">Coût Annuel Total</p>
+                <p style="color:#15803d;font-size:18px;font-weight:bold;margin:0;">${formatEUR(totals.proposed * 12)}</p>
+                <p style="color:#6b7280;font-size:10px;margin:4px 0 0 0;">Sur 12 mois</p>
+              </div>
+              <div style="background:white;border:2px solid #e0e7ff;border-radius:8px;padding:14px;">
+                <p style="color:#6b7280;font-size:11px;margin:0 0 4px 0;">Coût Moyen / Copieur</p>
+                <p style="color:#374151;font-size:18px;font-weight:bold;margin:0;">${formatEUR(avg * f)}</p>
+                <p style="color:#6b7280;font-size:10px;margin:4px 0 0 0;">${periodObj.noun}</p>
+              </div>
+            </div>
+          `;
+        }
+
+        // Build recap table rows
+        const rowsTotals = copiers.reduce((acc, c) => {
+          const u = { bwCopies:c.bwCopies, colorCopies:c.colorCopies };
+          acc.bw += c.bwCopies; acc.color += c.colorCopies;
+          if (mode==="comparison") {
+            const r = compare(c.current, c.proposed, u);
+            acc.current += r.current.monthlyTotal;
+            acc.proposed += r.proposed.monthlyTotal;
+          } else {
+            acc.proposed += calcMonthly(c.proposed, u).monthlyTotal;
+          }
+          return acc;
+        }, { bw:0, color:0, current:0, proposed:0 });
+        const rowsSav = rowsTotals.current - rowsTotals.proposed;
+
+        let rowsHtml = "";
+        copiers.forEach((c) => {
+          const u = { bwCopies:c.bwCopies, colorCopies:c.colorCopies };
+          if (mode === "comparison") {
+            const r = compare(c.current, c.proposed, u);
+            rowsHtml += `
+              <tr style="border-bottom:1px solid #e5e7eb;">
+                <td style="padding:8px 10px;font-weight:500;color:#111827;font-size:11px;">${c.name}</td>
+                <td style="padding:8px 10px;text-align:right;color:#4b5563;font-size:11px;">${formatInt(c.bwCopies * f)}</td>
+                <td style="padding:8px 10px;text-align:right;color:#4b5563;font-size:11px;">${formatInt(c.colorCopies * f)}</td>
+                <td style="padding:8px 10px;text-align:right;color:#dc2626;font-size:11px;">${formatEUR(r.current.monthlyTotal * f)}</td>
+                <td style="padding:8px 10px;text-align:right;color:#15803d;font-size:11px;">${formatEUR(r.proposed.monthlyTotal * f)}</td>
+                <td style="padding:8px 10px;text-align:right;font-weight:600;color:${r.monthlySavings>=0 ? "#4338ca" : "#b91c1c"};font-size:11px;">${formatEUR(r.monthlySavings * f)}</td>
+              </tr>
+            `;
+          } else {
+            const s = calcMonthly(c.proposed, u);
+            rowsHtml += `
+              <tr style="border-bottom:1px solid #e5e7eb;">
+                <td style="padding:8px 10px;font-weight:500;color:#111827;font-size:11px;">${c.name}</td>
+                <td style="padding:8px 10px;text-align:right;color:#4b5563;font-size:11px;">${formatInt(c.bwCopies * f)}</td>
+                <td style="padding:8px 10px;text-align:right;color:#4b5563;font-size:11px;">${formatInt(c.colorCopies * f)}</td>
+                <td style="padding:8px 10px;text-align:right;color:#4338ca;font-weight:600;font-size:11px;">${formatEUR(s.monthlyTotal * f)}</td>
+              </tr>
+            `;
+          }
+        });
+
+        // Totals row
+        let totalsRow = "";
+        if (mode === "comparison") {
+          totalsRow = `
+            <tr style="background:#eff6ff;font-weight:bold;">
+              <td style="padding:10px;color:#111827;font-size:11px;">TOTAL</td>
+              <td style="padding:10px;text-align:right;color:#111827;font-size:11px;">${formatInt(rowsTotals.bw * f)}</td>
+              <td style="padding:10px;text-align:right;color:#111827;font-size:11px;">${formatInt(rowsTotals.color * f)}</td>
+              <td style="padding:10px;text-align:right;color:#b91c1c;font-size:11px;">${formatEUR(rowsTotals.current * f)}</td>
+              <td style="padding:10px;text-align:right;color:#15803d;font-size:11px;">${formatEUR(rowsTotals.proposed * f)}</td>
+              <td style="padding:10px;text-align:right;color:${rowsSav>=0 ? "#4338ca" : "#b91c1c"};font-size:11px;">${formatEUR(rowsSav * f)}</td>
+            </tr>
+          `;
+        } else {
+          totalsRow = `
+            <tr style="background:#eff6ff;font-weight:bold;">
+              <td style="padding:10px;color:#111827;font-size:11px;">TOTAL</td>
+              <td style="padding:10px;text-align:right;color:#111827;font-size:11px;">${formatInt(rowsTotals.bw * f)}</td>
+              <td style="padding:10px;text-align:right;color:#111827;font-size:11px;">${formatInt(rowsTotals.color * f)}</td>
+              <td style="padding:10px;text-align:right;color:#15803d;font-size:11px;">${formatEUR(rowsTotals.proposed * f)}</td>
+            </tr>
+          `;
+        }
+
+        // Build full HTML
+        return `
+          <div style="background:linear-gradient(to bottom right, #f8fafc, #f1f5f9); padding:24px; font-family:ui-sans-serif, system-ui, sans-serif;">
+            <!-- Header -->
+            <div style="text-align:center; margin-bottom:24px;">
+              <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:8px;">
+                <span style="display:inline-block;width:24px;height:24px;background:#2563eb;border-radius:4px;"></span>
+                <h1 style="font-size:24px;font-weight:bold;color:#111827;margin:0;">${saspName}</h1>
+              </div>
+              <p style="color:#4b5563;font-size:13px;margin:4px 0 0 0;">
+                ${mode === "comparison" ? "Comparaison solution actuelle / proposée" : "Calcul de coûts (mode simple)"}
+                · Périodicité : ${periodObj.label.toLowerCase()}
+              </p>
+              <p style="color:#6b7280;font-size:11px;margin:4px 0 0 0;">Exporté le ${exportDate}</p>
+            </div>
+
+            ${summaryHtml}
+
+            <!-- Recap table -->
+            <div style="background:white;border-radius:10px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+              <h2 style="font-size:14px;font-weight:bold;color:#111827;margin:0 0 12px 0;">
+                Détail par Copieur
+              </h2>
+              <table style="width:100%;border-collapse:collapse;">
+                <thead>
+                  <tr style="border-bottom:2px solid #d1d5db;">
+                    <th style="text-align:left;padding:8px 10px;font-weight:600;color:#374151;font-size:11px;">Copieur</th>
+                    <th style="text-align:right;padding:8px 10px;font-weight:600;color:#374151;font-size:11px;">N&B</th>
+                    <th style="text-align:right;padding:8px 10px;font-weight:600;color:#374151;font-size:11px;">Couleur</th>
+                    ${mode === "comparison" ? `<th style="text-align:right;padding:8px 10px;font-weight:600;color:#374151;font-size:11px;">Actuel${periodObj.unit}</th>` : ""}
+                    <th style="text-align:right;padding:8px 10px;font-weight:600;color:#15803d;font-size:11px;">${mode === "comparison" ? `Proposé${periodObj.unit}` : `Coût${periodObj.unit}`}</th>
+                    ${mode === "comparison" ? `<th style="text-align:right;padding:8px 10px;font-weight:600;color:#4338ca;font-size:11px;">Économies${periodObj.unit}</th>` : ""}
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rowsHtml}
+                  ${totalsRow}
+                </tbody>
+              </table>
+            </div>
+
+            <p style="text-align:center;color:#9ca3af;font-size:10px;margin-top:18px;">
+              Calculateur ROI Copieurs — Document généré automatiquement
+            </p>
+          </div>
+        `;
+      }
+
+      /* ---------------- App ---------------- */
+      function App() {
+        const previousSession = loadState();
+
+        const [mode,    setMode]    = useState("comparison");
+        const [period,  setPeriod]  = useState("monthly");
+        const [copiers, setCopiers] = useState(DEFAULT_COPIERS);
+        const [saved,   setSaved]   = useState(false);
+        const [hasBackup, setHasBackup] = useState(!!previousSession);
+
+        // SASP management
+        const [saspList, setSaspList] = useState(loadSaspList());
+        const [currentSaspId, setCurrentSaspId] = useState(loadCurrentSaspId());
+        const [currentSaspName, setCurrentSaspName] = useState(() => {
+          const id = loadCurrentSaspId();
+          const list = loadSaspList();
+          const found = id ? list.find(s => s.id === id) : null;
+          return found ? found.name : "Nouveau SASP";
+        });
+        const [sidebarOpen, setSidebarOpen] = useState(false);
+        const [exporting, setExporting] = useState(false);
+        const [dirty, setDirty] = useState(false); // changes since last save
+        const skipDirtyRef = useRef(true); // skip the first effect run
+
+        const restoreSession = () => {
+          if (!previousSession) return;
+          if (previousSession.copiers) setCopiers(previousSession.copiers);
+          if (previousSession.mode) setMode(previousSession.mode);
+          if (previousSession.period) setPeriod(previousSession.period);
+          setHasBackup(false);
+          skipDirtyRef.current = true;
+        };
+        const resetToDefaults = () => {
+          setCopiers(DEFAULT_COPIERS);
+          setMode("comparison");
+          setPeriod("monthly");
+          setCurrentSaspId(null);
+          setCurrentSaspName("Nouveau SASP");
+          saveCurrentSaspId(null);
+          skipDirtyRef.current = true;
+        };
+
+        // Auto-save working state
+        useEffect(() => {
+          saveState(copiers, mode, period);
+          setSaved(true);
+          const t = setTimeout(()=>setSaved(false), 1500);
+
+          if (skipDirtyRef.current) {
+            skipDirtyRef.current = false;
+          } else {
+            setDirty(true);
+          }
+          return () => clearTimeout(t);
+        }, [copiers, mode, period]);
+
+        const periodObj = getPeriod(period);
+
+        const addCopier = () => {
+          const nextId = (Math.max(0, ...copiers.map(c=>parseInt(c.id,10)||0)) + 1).toString();
+          setCopiers([...copiers, {
+            id: nextId,
+            name: `Copieur ${nextId}`,
+            current:  { rent:0, packageBW:0, packageColor:0, packageFixedCost:0, costPerExtraBW:0, costPerExtraColor:0 },
+            proposed: { rent:0, packageBW:0, packageColor:0, packageFixedCost:0, costPerExtraBW:0, costPerExtraColor:0 },
+            bwCopies:0, colorCopies:0,
+          }]);
+        };
+        const updateCopier = (c) => setCopiers(copiers.map(x => x.id === c.id ? c : x));
+        const deleteCopier = (id) => { if (copiers.length > 1) setCopiers(copiers.filter(c => c.id !== id)); };
+
+        /* ----- SASP actions ----- */
+        const handleNewSasp = () => {
+          if (dirty && currentSaspId === null) {
+            if (!confirm("Le SASP courant n'est pas enregistré. Continuer et perdre les modifications ?")) return;
+          }
+          resetToDefaults();
+          setDirty(false);
+          setSidebarOpen(false);
+        };
+
+        const handleSaveSasp = () => {
+          const snapshot = { copiers: JSON.parse(JSON.stringify(copiers)), mode, period };
+          const now = Date.now();
+
+          if (currentSaspId) {
+            // Update existing
+            const updated = saspList.map(s => s.id === currentSaspId
+              ? { ...s, name: currentSaspName, data: snapshot, updatedAt: now }
+              : s);
+            setSaspList(updated);
+            saveSaspList(updated);
+          } else {
+            // Save as new — prompt for name
+            const proposedName = currentSaspName === "Nouveau SASP" ? `SASP du ${formatDate(new Date())}` : currentSaspName;
+            const name = prompt("Nom du SASP à enregistrer :", proposedName);
+            if (!name || !name.trim()) return;
+            const newSasp = {
+              id: generateId(),
+              name: name.trim(),
+              data: snapshot,
+              createdAt: now,
+              updatedAt: now,
+            };
+            const updated = [newSasp, ...saspList];
+            setSaspList(updated);
+            saveSaspList(updated);
+            setCurrentSaspId(newSasp.id);
+            setCurrentSaspName(newSasp.name);
+            saveCurrentSaspId(newSasp.id);
+          }
+          setDirty(false);
+        };
+
+        const handleSaveAsSasp = () => {
+          const proposedName = currentSaspName && currentSaspName !== "Nouveau SASP"
+            ? `${currentSaspName} (copie)`
+            : `SASP du ${formatDate(new Date())}`;
+          const name = prompt("Nom du nouveau SASP :", proposedName);
+          if (!name || !name.trim()) return;
+          const snapshot = { copiers: JSON.parse(JSON.stringify(copiers)), mode, period };
+          const now = Date.now();
+          const newSasp = {
+            id: generateId(),
+            name: name.trim(),
+            data: snapshot,
+            createdAt: now,
+            updatedAt: now,
+          };
+          const updated = [newSasp, ...saspList];
+          setSaspList(updated);
+          saveSaspList(updated);
+          setCurrentSaspId(newSasp.id);
+          setCurrentSaspName(newSasp.name);
+          saveCurrentSaspId(newSasp.id);
+          setDirty(false);
+        };
+
+        const handleLoadSasp = (id) => {
+          const sasp = saspList.find(s => s.id === id);
+          if (!sasp) return;
+          if (dirty) {
+            if (!confirm("Le SASP courant n'est pas enregistré. Charger un autre SASP et perdre les modifications ?")) return;
+          }
+          skipDirtyRef.current = true;
+          if (sasp.data.copiers) setCopiers(sasp.data.copiers);
+          if (sasp.data.mode) setMode(sasp.data.mode);
+          if (sasp.data.period) setPeriod(sasp.data.period);
+          setCurrentSaspId(sasp.id);
+          setCurrentSaspName(sasp.name);
+          saveCurrentSaspId(sasp.id);
+          setDirty(false);
+          setSidebarOpen(false);
+        };
+
+        const handleDuplicateSasp = (id) => {
+          const sasp = saspList.find(s => s.id === id);
+          if (!sasp) return;
+          const now = Date.now();
+          const newSasp = {
+            id: generateId(),
+            name: `${sasp.name} (copie)`,
+            data: JSON.parse(JSON.stringify(sasp.data)),
+            createdAt: now,
+            updatedAt: now,
+          };
+          const updated = [newSasp, ...saspList];
+          setSaspList(updated);
+          saveSaspList(updated);
+        };
+
+        const handleRenameSasp = (id, newName) => {
+          const updated = saspList.map(s => s.id === id ? { ...s, name: newName, updatedAt: Date.now() } : s);
+          setSaspList(updated);
+          saveSaspList(updated);
+          if (id === currentSaspId) setCurrentSaspName(newName);
+        };
+
+        const handleDeleteSasp = (id) => {
+          const updated = saspList.filter(s => s.id !== id);
+          setSaspList(updated);
+          saveSaspList(updated);
+          if (id === currentSaspId) {
+            setCurrentSaspId(null);
+            setCurrentSaspName("Nouveau SASP");
+            saveCurrentSaspId(null);
+            setDirty(true);
+          }
+        };
+
+        const handleRenameCurrent = () => {
+          const newName = prompt("Renommer le SASP courant :", currentSaspName);
+          if (!newName || !newName.trim()) return;
+          setCurrentSaspName(newName.trim());
+          if (currentSaspId) {
+            const updated = saspList.map(s => s.id === currentSaspId ? { ...s, name: newName.trim(), updatedAt: Date.now() } : s);
+            setSaspList(updated);
+            saveSaspList(updated);
+          } else {
+            setDirty(true);
+          }
+        };
+
+        /* ----- Export PDF ----- */
+        const handleExportPdf = () => {
+          setExporting(true);
+          const exportDate = formatDate(new Date());
+          const html = buildPdfHtml({
+            saspName: currentSaspName || "SASP sans nom",
+            copiers,
+            mode,
+            period: periodObj,
+            exportDate,
+          });
+          const container = document.getElementById("pdf-export-container");
+          container.innerHTML = html;
+
+          const safeName = (currentSaspName || "SASP").replace(/[^a-zA-Z0-9-_]/g, "_");
+          const filename = `${safeName}_${exportDate.replace(/\//g, "-")}.pdf`;
+
+          html2pdf()
+            .set({
+              margin: [10, 10, 10, 10],
+              filename,
+              image: { type: "jpeg", quality: 0.95 },
+              html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
+              jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+              pagebreak: { mode: ["avoid-all", "css", "legacy"] },
+            })
+            .from(container)
+            .save()
+            .then(() => {
+              container.innerHTML = "";
+              setExporting(false);
+            })
+            .catch((err) => {
+              console.error(err);
+              alert("Erreur lors de la génération du PDF : " + err.message);
+              container.innerHTML = "";
+              setExporting(false);
+            });
+        };
+
+        return (
+          <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+            <SaspSidebar
+              open={sidebarOpen}
+              onClose={()=>setSidebarOpen(false)}
+              saspList={saspList}
+              currentSaspId={currentSaspId}
+              currentName={currentSaspName}
+              onLoad={handleLoadSasp}
+              onNew={handleNewSasp}
+              onDuplicate={handleDuplicateSasp}
+              onRename={handleRenameSasp}
+              onDelete={handleDeleteSasp}
+            />
+
+            {/* Top toolbar */}
+            <div className="sticky top-0 z-30 bg-white border-b border-gray-200 shadow-sm">
+              <div className="max-w-7xl mx-auto px-4 py-3 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={()=>setSidebarOpen(true)}
+                    className="flex items-center gap-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium px-3 py-2 rounded-lg transition text-sm"
+                    title="Voir mes SASP"
+                  >
+                    <I.folder className="w-4 h-4 text-indigo-600" />
+                    Mes SASP
+                    {saspList.length > 0 && <span className="bg-indigo-100 text-indigo-700 text-xs px-1.5 py-0.5 rounded-full font-semibold">{saspList.length}</span>}
+                  </button>
+
+                  <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                    <I.file className="w-4 h-4 text-gray-500" />
+                    <span className="text-sm font-medium text-gray-800 max-w-[200px] truncate" title={currentSaspName}>{currentSaspName}</span>
+                    {dirty && <span className="text-amber-600 text-xs font-semibold" title="Modifications non enregistrées">●</span>}
+                    <button
+                      onClick={handleRenameCurrent}
+                      className="text-gray-400 hover:text-indigo-600 ml-1"
+                      title="Renommer ce SASP"
+                    >
+                      <I.edit className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={handleNewSasp}
+                    className="flex items-center gap-1.5 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium px-3 py-2 rounded-lg transition text-sm"
+                    title="Nouveau SASP"
+                  >
+                    <I.plus className="w-4 h-4" />
+                    Nouveau
+                  </button>
+                  <button
+                    onClick={handleSaveSasp}
+                    className={`flex items-center gap-1.5 font-medium px-3 py-2 rounded-lg transition text-sm ${dirty || !currentSaspId ? "bg-indigo-600 hover:bg-indigo-700 text-white" : "bg-white border border-gray-300 text-gray-700 hover:bg-gray-50"}`}
+                    title="Enregistrer le SASP"
+                  >
+                    <I.save className="w-4 h-4" />
+                    Enregistrer
+                  </button>
+                  <button
+                    onClick={handleSaveAsSasp}
+                    className="flex items-center gap-1.5 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium px-3 py-2 rounded-lg transition text-sm"
+                    title="Enregistrer comme nouveau SASP"
+                  >
+                    <I.copy className="w-4 h-4" />
+                    Enreg. sous
+                  </button>
+                  <button
+                    onClick={handleExportPdf}
+                    disabled={exporting}
+                    className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white font-medium px-3 py-2 rounded-lg transition text-sm disabled:opacity-60 disabled:cursor-wait"
+                    title="Exporter en PDF"
+                  >
+                    <I.download className="w-4 h-4" />
+                    {exporting ? "Génération…" : "Export PDF"}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
+
+              {/* Header */}
+              <div className="text-center mb-10">
+                <div className="flex items-center justify-center gap-3 mb-4">
+                  <I.calc className="w-10 h-10 text-blue-600" />
+                  <h1 className="text-4xl font-bold text-gray-900">Calculateur ROI Copieurs</h1>
+                </div>
+                <p className="text-lg text-gray-600">
+                  {mode === "comparison"
+                    ? "Comparez votre solution actuelle à une solution proposée"
+                    : "Calculez les coûts mensuels de votre solution sans comparaison"}
+                </p>
+
+                {/* Mode toggle pill */}
+                <div className="mt-6 inline-flex items-center bg-white border border-gray-200 rounded-xl p-1 shadow-sm">
+                  <button
+                    onClick={()=>setMode("comparison")}
+                    className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition ${
+                      mode==="comparison" ? "bg-indigo-600 text-white shadow" : "text-gray-600 hover:text-gray-900"
+                    }`}
+                  >
+                    <I.swap className="w-4 h-4" />
+                    Mode Comparaison
+                  </button>
+                  <button
+                    onClick={()=>setMode("simple")}
+                    className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition ${
+                      mode==="simple" ? "bg-blue-600 text-white shadow" : "text-gray-600 hover:text-gray-900"
+                    }`}
+                  >
+                    <I.layers className="w-4 h-4" />
+                    Mode Simple
+                  </button>
+                </div>
+
+                {/* Period toggle pill */}
+                <div className="mt-4">
+                  <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">Périodicité de l'étude</p>
+                  <div className="inline-flex items-center bg-white border border-gray-200 rounded-xl p-1 shadow-sm">
+                    {PERIODS.map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={()=>setPeriod(p.id)}
+                        className={`px-5 py-2 rounded-lg text-sm font-medium transition ${
+                          period===p.id ? "bg-indigo-600 text-white shadow" : "text-gray-600 hover:text-gray-900"
+                        }`}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {saved && (
+                  <p className="mt-3 text-sm text-gray-500 inline-flex items-center gap-1.5">
+                    <I.check className="w-3.5 h-3.5 text-green-600" />
+                    Brouillon sauvegardé
+                  </p>
+                )}
+
+                {hasBackup && (
+                  <div className="mt-4 inline-flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-sm">
+                    <span className="text-amber-900">Une session précédente est disponible.</span>
+                    <button
+                      onClick={restoreSession}
+                      className="font-semibold text-amber-700 hover:text-amber-900 underline underline-offset-2"
+                    >
+                      La restaurer
+                    </button>
+                    <button
+                      onClick={()=>setHasBackup(false)}
+                      className="text-amber-700 hover:text-amber-900"
+                      title="Ignorer"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+
+                <div className="mt-3">
+                  <button
+                    onClick={() => {
+                      if (confirm("Réinitialiser tous les champs avec les valeurs par défaut ?")) resetToDefaults();
+                    }}
+                    className="text-xs text-gray-500 hover:text-gray-700 underline underline-offset-2"
+                  >
+                    Réinitialiser aux valeurs par défaut
+                  </button>
+                </div>
+              </div>
+
+              {/* Global summary */}
+              <GlobalSummary copiers={copiers} mode={mode} period={periodObj} />
+
+              {/* Recap table */}
+              <RecapTable copiers={copiers} mode={mode} period={periodObj} />
+
+              {/* Copier list */}
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
+                  <I.layers className="w-8 h-8 text-indigo-600" />
+                  Gérer vos copieurs
+                </h2>
+                <button
+                  onClick={addCopier}
+                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg transition"
+                >
+                  <I.plus className="w-4 h-4" />
+                  Ajouter un copieur
+                </button>
+              </div>
+
+              {copiers.map((c) => (
+                <CopierCard
+                  key={c.id}
+                  copier={c}
+                  mode={mode}
+                  period={periodObj}
+                  onChange={updateCopier}
+                  onDelete={()=>deleteCopier(c.id)}
+                  canDelete={copiers.length > 1}
+                />
+              ))}
+
+              <p className="mt-8 text-center text-sm text-gray-500">
+                Les volumes, loyers et forfaits se saisissent dans l'unité de la période sélectionnée. Les calculs internes restent cohérents quelle que soit la période choisie.
+              </p>
+            </div>
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
