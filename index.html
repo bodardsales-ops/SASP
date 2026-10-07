@@ -729,6 +729,99 @@
           `;
         }
 
+        // Per-copier cost breakdown: the same four lines the CostDetail
+        // component shows on screen (Loyer / Forfait fixe / N&B
+        // supplementaires / Couleur supplementaires), so the PDF explains how
+        // each total is reached instead of only stating it. Unit prices are
+        // per page and are never scaled by the period factor, exactly like the
+        // matching fields in the copier editor.
+        const formatUnit = (n) =>
+          (n || 0).toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + " €";
+
+        const cellule = (montant, calcul, gras) => `
+          <td style="padding:7px 10px;text-align:right;font-size:11px;color:#111827;white-space:nowrap;${gras ? "font-weight:bold;" : ""}">
+            ${montant}${calcul ? `<br><span style="color:#9ca3af;font-size:9px;font-weight:normal;">${calcul}</span>` : ""}
+          </td>`;
+
+        const celluleEcart = (avant, apres, gras) => {
+          const d = apres - avant;
+          const couleur = d < 0 ? "#15803d" : d > 0 ? "#b91c1c" : "#6b7280";
+          return `<td style="padding:7px 10px;text-align:right;font-size:11px;white-space:nowrap;font-weight:${gras ? "bold" : "600"};color:${couleur};">${d > 0 ? "+" : ""}${formatEUR(d)}</td>`;
+        };
+
+        const detailHtml = copiers.map((c) => {
+          const u = { bwCopies: c.bwCopies, colorCopies: c.colorCopies };
+          const pro = calcMonthly(c.proposed, u);
+          const cur = mode === "comparison" ? calcMonthly(c.current, u) : null;
+          const sup = (sol, volume, forfait) => Math.max(0, volume - forfait);
+          const exBWp  = sup(c.proposed, c.bwCopies,    c.proposed.packageBW);
+          const exClrP = sup(c.proposed, c.colorCopies, c.proposed.packageColor);
+          const exBWc  = mode === "comparison" ? sup(c.current, c.bwCopies,    c.current.packageBW)    : 0;
+          const exClrC = mode === "comparison" ? sup(c.current, c.colorCopies, c.current.packageColor) : 0;
+
+          const ligne = (libelle, mCur, cCur, mPro, cPro, vCur, vPro, gras) => `
+            <tr style="border-bottom:1px solid #f3f4f6;${gras ? "background:#eff6ff;" : ""}">
+              <td style="padding:7px 10px;font-size:11px;color:#374151;${gras ? "font-weight:bold;color:#111827;" : ""}">${libelle}</td>
+              ${mode === "comparison" ? cellule(mCur, cCur, gras) : ""}
+              ${cellule(mPro, cPro, gras)}
+              ${mode === "comparison" ? celluleEcart(vCur, vPro, gras) : ""}
+            </tr>`;
+
+          const entetes = mode === "comparison"
+            ? `<th style="text-align:right;padding:7px 10px;font-weight:600;color:#b91c1c;font-size:10px;">Solution Actuelle</th>
+               <th style="text-align:right;padding:7px 10px;font-weight:600;color:#15803d;font-size:10px;">Solution Proposée</th>
+               <th style="text-align:right;padding:7px 10px;font-weight:600;color:#4338ca;font-size:10px;">Écart</th>`
+            : `<th style="text-align:right;padding:7px 10px;font-weight:600;color:#4338ca;font-size:10px;">Votre Solution</th>`;
+
+          return `
+            <div style="background:white;border-radius:10px;padding:14px 16px;margin-top:12px;page-break-inside:avoid;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+              <h3 style="font-size:12px;font-weight:bold;color:#111827;margin:0 0 2px 0;">${c.name}</h3>
+              <p style="color:#6b7280;font-size:10px;margin:0 0 10px 0;">
+                Volumes facturés : ${formatInt(Math.round(c.bwCopies * f))} pages N&B · ${formatInt(Math.round(c.colorCopies * f))} pages couleur ${periodObj.noun}
+              </p>
+              <table style="width:100%;border-collapse:collapse;">
+                <thead>
+                  <tr style="border-bottom:2px solid #d1d5db;">
+                    <th style="text-align:left;padding:7px 10px;font-weight:600;color:#374151;font-size:10px;">Poste de coût</th>
+                    ${entetes}
+                  </tr>
+                </thead>
+                <tbody>
+                  ${ligne("Loyer",
+                      cur ? formatEUR(cur.rentCost * f) : "", "",
+                      formatEUR(pro.rentCost * f), "",
+                      cur ? cur.rentCost * f : 0, pro.rentCost * f, false)}
+                  ${ligne("Forfait fixe",
+                      cur ? formatEUR(cur.basePackageCost * f) : "", "",
+                      formatEUR(pro.basePackageCost * f), "",
+                      cur ? cur.basePackageCost * f : 0, pro.basePackageCost * f, false)}
+                  <tr style="border-bottom:1px solid #f3f4f6;">
+                    <td style="padding:7px 10px;font-size:11px;color:#374151;">Copies incluses <span style="color:#9ca3af;font-size:9px;">(N&B / Couleur)</span></td>
+                    ${mode === "comparison" ? `<td style="padding:7px 10px;text-align:right;font-size:11px;color:#111827;white-space:nowrap;">${formatInt(Math.round(c.current.packageBW * f))} / ${formatInt(Math.round(c.current.packageColor * f))}</td>` : ""}
+                    <td style="padding:7px 10px;text-align:right;font-size:11px;color:#111827;white-space:nowrap;">${formatInt(Math.round(c.proposed.packageBW * f))} / ${formatInt(Math.round(c.proposed.packageColor * f))}</td>
+                    ${mode === "comparison" ? `<td></td>` : ""}
+                  </tr>
+                  ${ligne("N&B supplémentaires",
+                      cur ? formatEUR(cur.extraBWCost * f) : "",
+                      cur ? `${formatInt(Math.round(exBWc * f))} × ${formatUnit(c.current.costPerExtraBW)}` : "",
+                      formatEUR(pro.extraBWCost * f),
+                      `${formatInt(Math.round(exBWp * f))} × ${formatUnit(c.proposed.costPerExtraBW)}`,
+                      cur ? cur.extraBWCost * f : 0, pro.extraBWCost * f, false)}
+                  ${ligne("Couleur supplémentaires",
+                      cur ? formatEUR(cur.extraColorCost * f) : "",
+                      cur ? `${formatInt(Math.round(exClrC * f))} × ${formatUnit(c.current.costPerExtraColor)}` : "",
+                      formatEUR(pro.extraColorCost * f),
+                      `${formatInt(Math.round(exClrP * f))} × ${formatUnit(c.proposed.costPerExtraColor)}`,
+                      cur ? cur.extraColorCost * f : 0, pro.extraColorCost * f, false)}
+                  ${ligne("TOTAL" + periodObj.unit,
+                      cur ? formatEUR(cur.monthlyTotal * f) : "", "",
+                      formatEUR(pro.monthlyTotal * f), "",
+                      cur ? cur.monthlyTotal * f : 0, pro.monthlyTotal * f, true)}
+                </tbody>
+              </table>
+            </div>`;
+        }).join("");
+
         // Build full HTML
         // min-height = printable height of an A4 page at 96 dpi
         // (297 mm - 2 x 10 mm of margin = 277 mm = 1047 px), so a short
@@ -772,6 +865,12 @@
                 </tbody>
               </table>
             </div>
+
+            <!-- Cost breakdown, one block per copier -->
+            <h2 style="font-size:14px;font-weight:bold;color:#111827;margin:20px 0 0 0;">
+              Décomposition des coûts
+            </h2>
+            ${detailHtml}
 
             <p style="text-align:center;color:#9ca3af;font-size:10px;margin-top:18px;">
               Calculateur ROI Copieurs — Document généré automatiquement
