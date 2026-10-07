@@ -1116,6 +1116,15 @@
                   useCORS: true,
                   backgroundColor: "#ffffff",
                   logging: false,
+                  // Do NOT remove these two. The export container is absolutely
+                  // positioned in the document, so unless the capture origin is
+                  // pinned, html2canvas offsets the snapshot by however far the
+                  // page happens to be scrolled: the report then starts that
+                  // many pixels down the sheet and is cut off at the bottom.
+                  // Reproduced at scrollY 800 — content rendered at y 830
+                  // instead of y 30.
+                  scrollX: 0,
+                  scrollY: 0,
                 },
                 jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
                 pagebreak: { mode: ["css", "legacy"] },
