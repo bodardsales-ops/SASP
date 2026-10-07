@@ -15,24 +15,36 @@
       input[type=number] { -moz-appearance: textfield; }
       body { font-family: ui-sans-serif, system-ui, sans-serif; }
 
-      /* PDF export styles — off-screen LEFT so the browser still paints it
-         (top: -10000px is treated as "not visible" by some browsers and
-         html2canvas captures an empty snapshot) */
-      #pdf-export-container {
+      /* PDF export styles.
+
+         The off-screen positioning MUST stay on the host, never on the element
+         handed to html2pdf. html2pdf clones that element into its own container
+         and the clone keeps its id, so an id-based `position: absolute` applies
+         to the clone too: it leaves the flow, the container collapses to zero
+         height, and the PDF comes out blank. */
+      /* A4 at 96 dpi is 794 x 1123 px, but html2pdf only ever captures the
+         PRINTABLE area: the page minus the 10 mm margins set in the export
+         options below. Anything wider is silently cropped on the right — which
+         used to cut off the fourth summary card and the last table column. The
+         container is therefore sized to the printable area, not to the page.
+         Change these two values if the export margins ever change. */
+      #pdf-export-host {
         position: absolute;
         left: -10000px;
         top: 0;
-        width: 794px; /* ~A4 width at 96dpi */
-        background: white;
-        padding: 30px;
-        font-family: ui-sans-serif, system-ui, sans-serif;
+        width: 718px; /* 190 mm = 210 - 2 x 10 */
         z-index: -1;
+      }
+      #pdf-export-container {
+        width: 718px;
+        background: white;
+        font-family: ui-sans-serif, system-ui, sans-serif;
       }
     </style>
   </head>
   <body>
     <div id="root"></div>
-    <div id="pdf-export-container"></div>
+    <div id="pdf-export-host"><div id="pdf-export-container"></div></div>
 
     <script type="text/babel">
       const { useState, useEffect, useRef } = React;
@@ -718,8 +730,11 @@
         }
 
         // Build full HTML
+        // min-height = printable height of an A4 page at 96 dpi
+        // (297 mm - 2 x 10 mm of margin = 277 mm = 1047 px), so a short
+        // report fills the sheet instead of floating in its top half.
         return `
-          <div style="background:linear-gradient(to bottom right, #f8fafc, #f1f5f9); padding:24px; font-family:ui-sans-serif, system-ui, sans-serif;">
+          <div style="background:linear-gradient(to bottom right, #f8fafc, #f1f5f9); padding:24px; box-sizing:border-box; min-height:1047px; font-family:ui-sans-serif, system-ui, sans-serif;">
             <!-- Header -->
             <div style="text-align:center; margin-bottom:24px;">
               <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:8px;">
@@ -767,13 +782,17 @@
 
       /* ---------------- App ---------------- */
       function App() {
+        // The previous session is restored straight into the initial state.
+        // It used to be offered through a banner, but the auto-save effect
+        // below runs on mount and rewrote localStorage with the defaults
+        // before the user could click it — so every reload silently destroyed
+        // the saved work.
         const previousSession = loadState();
 
-        const [mode,    setMode]    = useState("comparison");
-        const [period,  setPeriod]  = useState("monthly");
-        const [copiers, setCopiers] = useState(DEFAULT_COPIERS);
+        const [mode,    setMode]    = useState(previousSession && previousSession.mode ? previousSession.mode : "comparison");
+        const [period,  setPeriod]  = useState(previousSession && previousSession.period ? previousSession.period : "monthly");
+        const [copiers, setCopiers] = useState(previousSession && previousSession.copiers ? previousSession.copiers : DEFAULT_COPIERS);
         const [saved,   setSaved]   = useState(false);
-        const [hasBackup, setHasBackup] = useState(!!previousSession);
 
         // SASP management
         const [saspList, setSaspList] = useState(loadSaspList());
@@ -789,14 +808,6 @@
         const [dirty, setDirty] = useState(false); // changes since last save
         const skipDirtyRef = useRef(true); // skip the first effect run
 
-        const restoreSession = () => {
-          if (!previousSession) return;
-          if (previousSession.copiers) setCopiers(previousSession.copiers);
-          if (previousSession.mode) setMode(previousSession.mode);
-          if (previousSession.period) setPeriod(previousSession.period);
-          setHasBackup(false);
-          skipDirtyRef.current = true;
-        };
         const resetToDefaults = () => {
           setCopiers(DEFAULT_COPIERS);
           setMode("comparison");
@@ -1006,10 +1017,6 @@
                   useCORS: true,
                   backgroundColor: "#ffffff",
                   logging: false,
-                  windowWidth: 794,
-                  // Make sure the element is found even though it's off-screen left
-                  scrollX: 0,
-                  scrollY: 0,
                 },
                 jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
                 pagebreak: { mode: ["css", "legacy"] },
@@ -1168,25 +1175,6 @@
                     <I.check className="w-3.5 h-3.5 text-green-600" />
                     Brouillon sauvegardé
                   </p>
-                )}
-
-                {hasBackup && (
-                  <div className="mt-4 inline-flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-sm">
-                    <span className="text-amber-900">Une session précédente est disponible.</span>
-                    <button
-                      onClick={restoreSession}
-                      className="font-semibold text-amber-700 hover:text-amber-900 underline underline-offset-2"
-                    >
-                      La restaurer
-                    </button>
-                    <button
-                      onClick={()=>setHasBackup(false)}
-                      className="text-amber-700 hover:text-amber-900"
-                      title="Ignorer"
-                    >
-                      ✕
-                    </button>
-                  </div>
                 )}
 
                 <div className="mt-3">
