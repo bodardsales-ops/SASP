@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Le process de dématérialisation Zeendoc : scan sur copieur multifonction, dépôt automatique, océrisation, recherche plein texte.">
+<meta property="og:title" content="Le parcours Zeendoc">
+<meta property="og:description" content="Du papier scanné au document retrouvé en quelques secondes.">
+<meta property="og:type" content="website">
+<style>:root{padding-top:env(safe-area-inset-top,0);padding-bottom:env(safe-area-inset-bottom,0)}html,body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>Le parcours Zeendoc</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout : scène claire 16/9, légende à gauche et mécanique à droite ; frise des 5 étapes lisible à l'arrêt sous la scène.
+     Couleurs reprises du logo Zeendoc : marine #000064 et corail #FA4641. */
+  :root {
+    --navy: #000064;
+    --navy-ink: #13153F;
+    --navy-mid: #4A4D86;
+    --navy-soft: #EDEEF7;
+    --coral: #FA4641;
+    --coral-soft: #FFE9E8;
+    --bg: #F6F7FC;
+    --card: #FFFFFF;
+    --line: #DFE2F0;
+    --line-strong: #C7CCE4;
+    --paper: #FFFFFF;
+    --paper-line: #C9CDE2;
+    --display: "Plus Jakarta Sans", "Helvetica Neue", Arial, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+    color-scheme: light;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--navy-ink);
+    font-family: var(--display);
+    font-size: 16px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: clamp(20px, 4vw, 44px);
+    display: flex;
+    flex-direction: column;
+    gap: clamp(14px, 2.4vw, 22px);
+  }
+
+  .brandline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+  .wordmark {
+    font-size: clamp(17px, 2.2vw, 22px);
+    font-weight: 800;
+    letter-spacing: -.02em;
+    color: var(--navy);
+  }
+
+  .wordmark i {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--coral);
+    margin-left: 3px;
+    vertical-align: .12em;
+  }
+
+  .by {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .06em;
+    color: var(--navy-mid);
+    border-left: 1px solid var(--line-strong);
+    padding-left: 10px;
+  }
+
+  h1 {
+    font-size: clamp(22px, 3.4vw, 34px);
+    line-height: 1.14;
+    font-weight: 800;
+    letter-spacing: -.025em;
+    color: var(--navy);
+    text-wrap: balance;
+    margin: 4px 0 0;
+  }
+
+  .lede {
+    color: var(--navy-mid);
+    margin: 8px 0 0;
+    max-width: 62ch;
+    font-size: clamp(14px, 1.6vw, 16px);
+  }
+
+  /* ---------- scène ---------- */
+  .stage {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    overflow: hidden;
+    background:
+      radial-gradient(90% 80% at 88% 6%, rgba(250, 70, 65, .07), transparent 62%),
+      radial-gradient(80% 70% at 4% 96%, rgba(0, 0, 100, .06), transparent 60%),
+      var(--card);
+    box-shadow: 0 18px 40px -24px rgba(19, 21, 63, .3);
+  }
+
+  .scene {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: .86fr 1.14fr;
+    align-items: center;
+    gap: clamp(10px, 2.2vw, 30px);
+    padding: clamp(14px, 2.8vw, 34px);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity .45s ease;
+  }
+
+  .scene.is-active { opacity: 1; visibility: visible; }
+
+  .cap { min-width: 0; }
+
+  .step-num {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .12em;
+    color: var(--coral);
+    background: var(--coral-soft);
+    border-radius: 999px;
+    padding: 4px 10px;
+  }
+
+  .cap h2 {
+    font-size: clamp(17px, 2.5vw, 27px);
+    line-height: 1.14;
+    letter-spacing: -.02em;
+    font-weight: 800;
+    color: var(--navy);
+    margin: 9px 0 0;
+    text-wrap: balance;
+  }
+
+  .cap p {
+    color: var(--navy-mid);
+    font-size: clamp(12px, 1.4vw, 15px);
+    margin: 8px 0 0;
+    max-width: 34ch;
+  }
+
+  .viz {
+    position: relative;
+    min-width: 0;
+    height: 100%;
+    display: grid;
+    place-items: center;
+  }
+
+  /* ---------- feuille ---------- */
+  .sheet {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    box-shadow: 0 10px 24px -12px rgba(19, 21, 63, .35);
+    padding: 9%;
+    display: flex;
+    flex-direction: column;
+    gap: 6%;
+    width: 46%;
+    aspect-ratio: 3 / 4;
+  }
+
+  .sheet .hd {
+    font-family: var(--mono);
+    font-size: clamp(6px, .82vw, 9px);
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--navy-mid);
+    border-bottom: 1px solid var(--paper-line);
+    padding-bottom: 5%;
+  }
+
+  .sheet .lines { display: flex; flex-direction: column; gap: 22%; flex: 1; }
+  .sheet .lines i { display: block; height: 2px; background: var(--paper-line); border-radius: 2px; }
+  .sheet .lines i:nth-child(2) { width: 82%; }
+  .sheet .lines i:nth-child(4) { width: 64%; }
+  .sheet .lines i:nth-child(5) { width: 90%; }
+
+  .sheet .tot {
+    font-family: var(--mono);
+    font-size: clamp(7px, 1vw, 11px);
+    color: var(--navy);
+    display: flex;
+    justify-content: space-between;
+    border-top: 1px solid var(--paper-line);
+    padding-top: 5%;
+  }
+
+  /* S1 */
+  .pile { position: relative; width: 56%; aspect-ratio: 4 / 3.4; }
+  .pile .sheet { position: absolute; width: 58%; left: 21%; top: 6%; }
+  .pile .sheet:nth-child(1) { transform: rotate(-9deg) translateY(10px); }
+  .pile .sheet:nth-child(2) { transform: rotate(4deg) translateY(4px); }
+  .pile .sheet:nth-child(3) { transform: rotate(-2deg); }
+  .scene.is-active .pile .sheet { animation: drop .7s cubic-bezier(.2, .9, .3, 1) backwards; }
+  .scene.is-active .pile .sheet:nth-child(1) { animation-delay: .05s; }
+  .scene.is-active .pile .sheet:nth-child(2) { animation-delay: .25s; }
+  .scene.is-active .pile .sheet:nth-child(3) { animation-delay: .45s; }
+
+  @keyframes drop { from { opacity: 0; transform: translateY(46px) rotate(-14deg); } }
+
+  .tag {
+    position: absolute;
+    font-family: var(--mono);
+    font-size: clamp(8px, 1vw, 11px);
+    color: var(--navy);
+    border: 1px solid var(--line-strong);
+    background: var(--card);
+    border-radius: 999px;
+    padding: 4px 9px;
+    white-space: nowrap;
+    box-shadow: 0 4px 10px -6px rgba(19, 21, 63, .4);
+  }
+
+  .pile .tag:nth-of-type(1) { left: -6%; top: 2%; }
+  .pile .tag:nth-of-type(2) { right: -8%; top: 44%; }
+  .pile .tag:nth-of-type(3) { left: 2%; bottom: -2%; }
+  .scene.is-active .pile .tag { animation: fadeUp .5s ease backwards; }
+  .scene.is-active .pile .tag:nth-of-type(1) { animation-delay: .7s; }
+  .scene.is-active .pile .tag:nth-of-type(2) { animation-delay: .95s; }
+  .scene.is-active .pile .tag:nth-of-type(3) { animation-delay: 1.2s; }
+
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } }
+
+  /* S2 : copieur */
+  .mfp { width: min(100%, 320px); display: block; }
+  .mfp .shell { fill: #E9EBF6; stroke: var(--line-strong); }
+  .mfp .shell-2 { fill: #DFE2F0; stroke: var(--line-strong); }
+  .mfp .slot { fill: #C2C7DF; }
+  .mfp .screen { fill: var(--navy); }
+  .mfp .screen-txt { font-family: var(--mono); font-size: 7.5px; fill: #FFFFFF; }
+  .mfp .model { font-family: var(--mono); font-size: 7px; fill: var(--navy-mid); letter-spacing: .08em; }
+  .mfp .glass { fill: #CFD4E8; }
+  .mfp .feed { fill: #FFFFFF; stroke: var(--line-strong); stroke-width: .6; }
+
+  .scene.is-active .mfp .feed { animation: feed 1.5s ease-in-out .35s infinite; }
+  @keyframes feed {
+    0% { transform: translateY(-16px); opacity: 0; }
+    22% { opacity: 1; }
+    70% { transform: translateY(14px); opacity: 1; }
+    100% { transform: translateY(22px); opacity: 0; }
+  }
+
+  .mfp .beam { fill: var(--coral); }
+  .scene.is-active .mfp .beam { animation: beam 1.5s ease-in-out .35s infinite; }
+  @keyframes beam {
+    0%, 18% { opacity: 0; transform: translateX(0); }
+    30% { opacity: 1; }
+    78% { opacity: 1; transform: translateX(150px); }
+    100% { opacity: 0; transform: translateX(150px); }
+  }
+
+  .counter {
+    position: absolute;
+    right: 2%;
+    top: 6%;
+    font-family: var(--mono);
+    font-size: clamp(9px, 1.15vw, 13px);
+    color: var(--navy);
+    border: 1px solid var(--line-strong);
+    background: var(--card);
+    border-radius: 7px;
+    padding: 5px 9px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* S3 : armoire */
+  .flow { position: relative; width: 100%; height: 100%; }
+  .flow svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .flow .path { fill: none; stroke: var(--line-strong); stroke-width: 1.5; stroke-dasharray: 5 6; }
+  .flow .trace { fill: none; stroke: var(--coral); stroke-width: 2; stroke-dasharray: 260; stroke-dashoffset: 260; }
+  .scene.is-active .flow .trace { animation: trace 2.1s ease-in-out .2s forwards; }
+  @keyframes trace { to { stroke-dashoffset: 0; } }
+
+  .flow .doc { fill: #FFFFFF; stroke: var(--line-strong); stroke-width: .8; }
+  .flow .doc-line { stroke: var(--paper-line); stroke-width: 1.4; }
+  .flow .mover { offset-path: path("M 36 150 C 100 60, 190 40, 268 74"); offset-distance: 0%; }
+  .scene.is-active .flow .mover { animation: travel 2.1s cubic-bezier(.4, .05, .3, 1) .2s forwards; }
+  @keyframes travel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+
+  .flow .cab { fill: var(--navy); }
+  .flow .cab-draw { fill: #2B2D7A; }
+  .flow .cab-lbl { font-family: var(--mono); font-size: 7px; fill: var(--navy); letter-spacing: .08em; }
+  .flow .start-lbl { font-family: var(--mono); font-size: 7px; fill: var(--navy-mid); letter-spacing: .06em; }
+  .flow .ping { fill: var(--coral); opacity: 0; }
+  .scene.is-active .flow .ping { animation: ping .9s ease-out 2.2s forwards; }
+  @keyframes ping {
+    0% { opacity: .5; r: 4; }
+    100% { opacity: 0; r: 26; }
+  }
+
+  /* S4 : océrisation */
+  .ocr { position: relative; display: grid; grid-template-columns: 1fr 1.08fr; gap: clamp(8px, 1.6vw, 18px); align-items: center; width: 100%; }
+  .ocr .doc-wrap { position: relative; justify-self: center; width: 100%; max-width: 150px; }
+  .ocr .sheet { width: 100%; }
+
+  .ocr .scanline {
+    position: absolute;
+    left: -3%;
+    right: -3%;
+    height: 2px;
+    background: var(--coral);
+    box-shadow: 0 0 12px 2px rgba(250, 70, 65, .5);
+    top: 0;
+    opacity: 0;
+  }
+
+  .scene.is-active .ocr .scanline { animation: scan 2.4s cubic-bezier(.5, 0, .5, 1) .2s 1 forwards; }
+  @keyframes scan {
+    0% { top: 2%; opacity: 0; }
+    10% { opacity: 1; }
+    85% { top: 96%; opacity: 1; }
+    100% { top: 98%; opacity: 0; }
+  }
+
+  .ocr .hit {
+    position: absolute;
+    background: rgba(250, 70, 65, .16);
+    outline: 1px solid var(--coral);
+    border-radius: 2px;
+    opacity: 0;
+  }
+
+  .ocr .hit:nth-of-type(1) { left: 12%; top: 20%; width: 44%; height: 7%; }
+  .ocr .hit:nth-of-type(2) { left: 12%; top: 46%; width: 30%; height: 6%; }
+  .ocr .hit:nth-of-type(3) { left: 46%; top: 82%; width: 42%; height: 7%; }
+  .scene.is-active .ocr .hit { animation: pop .4s ease backwards; }
+  .scene.is-active .ocr .hit:nth-of-type(1) { animation-delay: .8s; }
+  .scene.is-active .ocr .hit:nth-of-type(2) { animation-delay: 1.5s; }
+  .scene.is-active .ocr .hit:nth-of-type(3) { animation-delay: 2.3s; }
+  @keyframes pop { from { opacity: 0; transform: scale(.9); } to { opacity: 1; } }
+
+  .fields { display: flex; flex-direction: column; gap: clamp(4px, .8vh, 9px); min-width: 0; }
+
+  .field {
+    display: grid;
+    grid-template-columns: 12px 1fr auto;
+    align-items: baseline;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: clamp(8px, 1.05vw, 12px);
+    border-bottom: 1px solid var(--line);
+    padding-bottom: clamp(3px, .6vh, 6px);
+    opacity: 0;
+  }
+
+  .field .ok { color: var(--coral); font-size: .95em; }
+  .field .k { color: var(--navy-mid); letter-spacing: .04em; text-transform: uppercase; font-size: .86em; }
+  .field .v { color: var(--navy); font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .scene.is-active .field { animation: fadeUp .4s ease forwards; }
+  .scene.is-active .field:nth-child(1) { animation-delay: .9s; }
+  .scene.is-active .field:nth-child(2) { animation-delay: 1.25s; }
+  .scene.is-active .field:nth-child(3) { animation-delay: 1.6s; }
+  .scene.is-active .field:nth-child(4) { animation-delay: 1.95s; }
+  .scene.is-active .field:nth-child(5) { animation-delay: 2.3s; }
+
+  /* S5 : recherche */
+  .search { width: 100%; display: flex; flex-direction: column; gap: clamp(7px, 1.4vh, 14px); }
+
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    border: 1px solid var(--line-strong);
+    background: var(--card);
+    border-radius: 10px;
+    padding: clamp(7px, 1.2vh, 11px) clamp(9px, 1.4vw, 14px);
+    box-shadow: 0 6px 16px -10px rgba(19, 21, 63, .35);
+  }
+
+  .bar svg { flex: none; }
+  .bar .q { font-family: var(--mono); font-size: clamp(10px, 1.25vw, 14px); color: var(--navy); }
+  .bar .caret { display: inline-block; width: 1px; height: 1em; background: var(--coral); vertical-align: -2px; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .res { display: flex; flex-direction: column; gap: clamp(5px, 1vh, 9px); }
+
+  .hitcard {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: clamp(7px, 1.2vw, 12px);
+    border: 1px solid var(--line);
+    background: var(--card);
+    border-radius: 10px;
+    padding: clamp(6px, 1.1vh, 11px) clamp(8px, 1.3vw, 13px);
+    opacity: 0;
+  }
+
+  .scene.is-active .hitcard { animation: slideIn .45s cubic-bezier(.2, .9, .3, 1) forwards; }
+  .scene.is-active .hitcard:nth-child(1) { animation-delay: 1.9s; }
+  .scene.is-active .hitcard:nth-child(2) { animation-delay: 2.15s; }
+  .scene.is-active .hitcard:nth-child(3) { animation-delay: 2.4s; }
+  @keyframes slideIn { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+
+  .hitcard .ic { width: 20px; height: 26px; border-radius: 3px; background: var(--navy-soft); border: 1px solid var(--line-strong); position: relative; flex: none; }
+  .hitcard .ic::after { content: ""; position: absolute; inset: 24% 20% auto 20%; height: 2px; background: var(--navy-mid); opacity: .45; box-shadow: 0 5px 0 var(--navy-mid), 0 10px 0 var(--navy-mid); }
+  .hitcard .meta { min-width: 0; }
+  .hitcard .t { font-size: clamp(10px, 1.2vw, 13px); font-weight: 700; color: var(--navy); }
+  .hitcard .s { font-family: var(--mono); font-size: clamp(8px, .95vw, 11px); color: var(--navy-mid); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hitcard .s mark { background: var(--coral-soft); color: var(--coral); border-radius: 2px; padding: 0 2px; font-weight: 500; }
+  .hitcard .d { font-family: var(--mono); font-size: clamp(8px, .95vw, 11px); color: var(--navy-mid); font-variant-numeric: tabular-nums; }
+
+  .timing { font-family: var(--mono); font-size: clamp(8px, 1vw, 11px); color: var(--coral); opacity: 0; align-self: flex-start; }
+  .scene.is-active .timing { animation: fadeUp .4s ease 2.7s forwards; }
+
+  /* S6 */
+  .outro {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: clamp(10px, 2vh, 20px);
+  }
+
+  .outro h2 {
+    font-size: clamp(19px, 3.1vw, 34px);
+    line-height: 1.1;
+    letter-spacing: -.025em;
+    font-weight: 800;
+    color: var(--navy);
+    margin: 0;
+    max-width: 24ch;
+    text-wrap: balance;
+  }
+
+  .chain { display: flex; flex-wrap: wrap; gap: clamp(5px, .9vw, 10px); }
+
+  .chain span {
+    font-family: var(--mono);
+    font-size: clamp(8px, 1.05vw, 12px);
+    border: 1px solid var(--coral);
+    background: var(--coral-soft);
+    color: var(--coral);
+    border-radius: 999px;
+    padding: 5px 11px;
+  }
+
+  .scene.is-active .outro h2 { animation: fadeUp .6s ease backwards; }
+  .scene.is-active .chain span { animation: fadeUp .4s ease backwards; }
+  .scene.is-active .chain span:nth-child(1) { animation-delay: .35s; }
+  .scene.is-active .chain span:nth-child(2) { animation-delay: .5s; }
+  .scene.is-active .chain span:nth-child(3) { animation-delay: .65s; }
+  .scene.is-active .chain span:nth-child(4) { animation-delay: .8s; }
+  .scene.is-active .chain span:nth-child(5) { animation-delay: .95s; }
+
+  .sign { font-family: var(--mono); font-size: clamp(9px, 1.1vw, 12px); color: var(--navy-mid); margin: 0; }
+  .sign b { color: var(--navy); font-weight: 500; }
+
+  /* ---------- commandes ---------- */
+  .track { height: 3px; background: var(--line); border-radius: 999px; overflow: hidden; }
+  .track i { display: block; height: 100%; width: 0; background: var(--coral); }
+
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+
+  button {
+    font-family: var(--display);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--navy);
+    background: var(--card);
+    border: 1px solid var(--line-strong);
+    border-radius: 9px;
+    padding: 8px 13px;
+    cursor: pointer;
+  }
+
+  button:hover { border-color: var(--coral); color: var(--coral); }
+  button:focus-visible { outline: 2px solid var(--coral); outline-offset: 2px; }
+  .clock { font-family: var(--mono); font-size: 12px; color: var(--navy-mid); font-variant-numeric: tabular-nums; margin-left: auto; }
+
+  .frise { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; list-style: none; margin: 0; padding: 0; }
+  .frise li { min-width: 0; }
+
+  .frise button {
+    width: 100%;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 9px 10px;
+  }
+
+  .frise button b { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; color: var(--navy-mid); font-weight: 400; }
+  .frise button span { font-size: 12px; line-height: 1.25; font-weight: 500; }
+  .frise button[aria-current="true"] { border-color: var(--coral); background: var(--coral-soft); }
+  .frise button[aria-current="true"] b, .frise button[aria-current="true"] span { color: var(--coral); }
+
+  footer { color: var(--navy-mid); font-size: 12px; border-top: 1px solid var(--line); padding-top: 14px; }
+
+  @media (max-width: 680px) {
+    .stage { aspect-ratio: 4 / 5; }
+    .scene { grid-template-columns: 1fr; grid-template-rows: auto 1fr; align-items: start; }
+    .ocr { grid-template-columns: .85fr 1.15fr; }
+    .cap p { max-width: none; }
+    .frise { grid-template-columns: 1fr 1fr; }
+    .mfp { width: min(100%, 230px); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .scene, .scene * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brandline">
+      <span class="wordmark">Zeendoc<i></i></span>
+      <span class="by">Démonstration du process</span>
+    </div>
+    <h1>Du papier scanné au document retrouvé en quelques secondes</h1>
+    <p class="lede">Le parcours d'une facture fournisseur : numérisation sur le Toshiba e-STUDIO&nbsp;339CS, dépôt automatique dans Zeendoc, océrisation du contenu, puis recherche par n'importe quel mot présent dans le document.</p>
+  </header>
+
+  <div class="stage" id="stage">
+
+    <section class="scene" data-scene="1">
+      <div class="cap">
+        <span class="step-num">ÉTAPE 01</span>
+        <h2>Le papier arrive, tous les jours</h2>
+        <p>Factures fournisseurs, bons de livraison, bons de commande : autant de documents à rapprocher, à valider puis à retrouver.</p>
+      </div>
+      <div class="viz">
+        <div class="pile">
+          <div class="sheet"><div class="hd">Bon de livraison</div><div class="lines"><i></i><i></i><i></i><i></i><i></i></div><div class="tot"><span>BL</span><span>12 colis</span></div></div>
+          <div class="sheet"><div class="hd">Bon de commande</div><div class="lines"><i></i><i></i><i></i><i></i><i></i></div><div class="tot"><span>BC</span><span>8 lignes</span></div></div>
+          <div class="sheet"><div class="hd">Facture fournisseur</div><div class="lines"><i></i><i></i><i></i><i></i><i></i></div><div class="tot"><span>TTC</span><span>1 248,60 €</span></div></div>
+          <span class="tag">à rapprocher</span>
+          <span class="tag">à valider</span>
+          <span class="tag">à archiver</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="scene" data-scene="2">
+      <div class="cap">
+        <span class="step-num">ÉTAPE 02</span>
+        <h2>Numérisation sur le e-STUDIO 339CS</h2>
+        <p>Le document part directement du copieur vers Zeendoc, en un seul bouton : pas de poste à allumer, pas de dossier à choisir.</p>
+      </div>
+      <div class="viz">
+        <span class="counter">12 / 12 pages</span>
+        <svg class="mfp" viewBox="0 0 320 250" role="img" aria-label="Copieur multifonction numérisant un document">
+          <rect class="shell-2" x="78" y="14" width="164" height="12" rx="3"/>
+          <rect class="feed" x="128" y="4" width="64" height="18" rx="1"/>
+          <rect class="shell" x="62" y="26" width="196" height="38" rx="7"/>
+          <rect class="glass" x="76" y="38" width="168" height="14" rx="2"/>
+          <rect class="beam" x="78" y="40" width="14" height="10" rx="2"/>
+          <rect class="shell" x="48" y="68" width="224" height="104" rx="9"/>
+          <rect class="screen" x="60" y="80" width="86" height="30" rx="5"/>
+          <text class="screen-txt" x="68" y="92">SCAN →</text>
+          <text class="screen-txt" x="68" y="103">ZEENDOC</text>
+          <circle cx="166" cy="88" r="4" fill="#FA4641"/>
+          <circle cx="180" cy="88" r="4" fill="#C7CCE4"/>
+          <circle cx="194" cy="88" r="4" fill="#C7CCE4"/>
+          <rect class="slot" x="158" y="120" width="98" height="8" rx="2"/>
+          <rect class="shell-2" x="152" y="130" width="106" height="9" rx="2"/>
+          <text class="model" x="60" y="134">e-STUDIO 339CS</text>
+          <rect class="shell-2" x="62" y="176" width="196" height="46" rx="5"/>
+          <rect class="slot" x="78" y="188" width="76" height="6" rx="2"/>
+          <rect class="slot" x="78" y="202" width="76" height="6" rx="2"/>
+          <text class="model" x="176" y="206">A4 · A3</text>
+          <circle cx="86" cy="232" r="7" fill="#DFE2F0" stroke="#C7CCE4"/>
+          <circle cx="234" cy="232" r="7" fill="#DFE2F0" stroke="#C7CCE4"/>
+        </svg>
+      </div>
+    </section>
+
+    <section class="scene" data-scene="3">
+      <div class="cap">
+        <span class="step-num">ÉTAPE 03</span>
+        <h2>Dépôt automatique dans votre armoire</h2>
+        <p>Le fichier rejoint l'armoire Zeendoc du service concerné, rangé dans la bonne catégorie sans intervention manuelle.</p>
+      </div>
+      <div class="viz">
+        <div class="flow">
+          <svg viewBox="0 0 300 190" role="img" aria-label="Le document numérisé rejoint l'armoire Zeendoc">
+            <path class="path" d="M 36 150 C 100 60, 190 40, 268 74"/>
+            <path class="trace" d="M 36 150 C 100 60, 190 40, 268 74"/>
+            <rect class="cab" x="226" y="58" width="62" height="92" rx="7"/>
+            <rect class="cab-draw" x="234" y="68" width="46" height="22" rx="3"/>
+            <rect class="cab-draw" x="234" y="94" width="46" height="22" rx="3"/>
+            <rect class="cab-draw" x="234" y="120" width="46" height="22" rx="3"/>
+            <text class="cab-lbl" x="226" y="52">ARMOIRE ZEENDOC</text>
+            <text class="start-lbl" x="14" y="168">339CS</text>
+            <circle class="ping" cx="268" cy="74" r="4"/>
+            <g class="mover">
+              <g transform="translate(-11,-14)">
+                <rect class="doc" x="0" y="0" width="22" height="28" rx="2"/>
+                <line class="doc-line" x1="4" y1="8" x2="18" y2="8"/>
+                <line class="doc-line" x1="4" y1="14" x2="18" y2="14"/>
+                <line class="doc-line" x1="4" y1="20" x2="13" y2="20"/>
+              </g>
+            </g>
+          </svg>
+        </div>
+      </div>
+    </section>
+
+    <section class="scene" data-scene="4">
+      <div class="cap">
+        <span class="step-num">ÉTAPE 04</span>
+        <h2>Océrisation : l'image devient du texte</h2>
+        <p>Zeendoc lit le document, reconnaît son contenu et en extrait les informations clés pour l'indexer automatiquement.</p>
+      </div>
+      <div class="viz">
+        <div class="ocr">
+          <div class="doc-wrap">
+            <div class="sheet">
+              <div class="hd">Facture fournisseur</div>
+              <div class="lines"><i></i><i></i><i></i><i></i><i></i></div>
+              <div class="tot"><span>TTC</span><span>1 248,60 €</span></div>
+            </div>
+            <span class="hit"></span>
+            <span class="hit"></span>
+            <span class="hit"></span>
+            <span class="scanline"></span>
+          </div>
+          <div class="fields">
+            <div class="field"><span class="ok">✓</span><span class="k">Fournisseur</span><span class="v">Fournisseur Démo</span></div>
+            <div class="field"><span class="ok">✓</span><span class="k">N° pièce</span><span class="v">FA-2026-0471</span></div>
+            <div class="field"><span class="ok">✓</span><span class="k">Date</span><span class="v">28/10/2026</span></div>
+            <div class="field"><span class="ok">✓</span><span class="k">Montant HT</span><span class="v">1 040,50</span></div>
+            <div class="field"><span class="ok">✓</span><span class="k">Total TTC</span><span class="v">1 248,60</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="scene" data-scene="5">
+      <div class="cap">
+        <span class="step-num">ÉTAPE 05</span>
+        <h2>Retrouvez un document par son contenu</h2>
+        <p>Un numéro de facture, un nom de fournisseur, un montant : tout mot présent dans le document devient un critère de recherche.</p>
+      </div>
+      <div class="viz">
+        <div class="search">
+          <div class="bar">
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="6" cy="6" r="4.4" fill="none" stroke="#4A4D86" stroke-width="1.5"/><line x1="9.4" y1="9.4" x2="13" y2="13" stroke="#4A4D86" stroke-width="1.5"/></svg>
+            <span class="q" id="query"></span><span class="caret" aria-hidden="true"></span>
+          </div>
+          <div class="res">
+            <div class="hitcard">
+              <span class="ic" aria-hidden="true"></span>
+              <span class="meta"><span class="t">Facture FA-2026-0471</span><span class="s">… solde <mark>1 248,60</mark> € TTC …</span></span>
+              <span class="d">28/10/26</span>
+            </div>
+            <div class="hitcard">
+              <span class="ic" aria-hidden="true"></span>
+              <span class="meta"><span class="t">Bon de livraison BL-4412</span><span class="s">… rapprochement <mark>1 248,60</mark> …</span></span>
+              <span class="d">24/10/26</span>
+            </div>
+            <div class="hitcard">
+              <span class="ic" aria-hidden="true"></span>
+              <span class="meta"><span class="t">Relevé fournisseur Démo</span><span class="s">… dont <mark>1 248,60</mark> € restant …</span></span>
+              <span class="d">02/11/26</span>
+            </div>
+          </div>
+          <span class="timing">3 documents · recherche plein texte</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="scene" data-scene="6">
+      <div class="outro">
+        <h2>Une chaîne complète, du copieur à la recherche</h2>
+        <div class="chain">
+          <span>Scan 339CS</span>
+          <span>Dépôt automatique</span>
+          <span>Océrisation</span>
+          <span>Indexation</span>
+          <span>Recherche plein texte</span>
+        </div>
+        <p class="sign"><b>Zeendoc</b> · démonstration complète sur demande</p>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="track" aria-hidden="true"><i id="bar"></i></div>
+
+  <div class="controls">
+    <button id="toggle" type="button">Pause</button>
+    <button id="restart" type="button">Revoir depuis le début</button>
+    <span class="clock" id="clock">0 / 28 s</span>
+  </div>
+
+  <ul class="frise" id="frise">
+    <li><button type="button" data-go="0"><b>01</b><span>Le papier arrive</span></button></li>
+    <li><button type="button" data-go="1"><b>02</b><span>Scan sur le 339CS</span></button></li>
+    <li><button type="button" data-go="2"><b>03</b><span>Dépôt dans l'armoire</span></button></li>
+    <li><button type="button" data-go="3"><b>04</b><span>Océrisation</span></button></li>
+    <li><button type="button" data-go="4"><b>05</b><span>Recherche par contenu</span></button></li>
+  </ul>
+
+  <footer>Les noms, numéros et montants affichés sont des exemples. Animation de présentation du process de dématérialisation — Zeendoc est une marque de son éditeur, cette page est un support commercial réalisé par son partenaire.</footer>
+</div>
+
+<script>
+  (function () {
+    var scenes = Array.prototype.slice.call(document.querySelectorAll('.scene'));
+    var durations = [4200, 5400, 4400, 6000, 5400, 3400];
+    var total = durations.reduce(function (a, b) { return a + b; }, 0);
+    var bar = document.getElementById('bar');
+    var clock = document.getElementById('clock');
+    var toggle = document.getElementById('toggle');
+    var restart = document.getElementById('restart');
+    var friseBtns = Array.prototype.slice.call(document.querySelectorAll('#frise button'));
+    var query = document.getElementById('query');
+    var QUERY = '1 248,60';
+
+    var current = -1;
+    var elapsed = 0;
+    var playing = true;
+    var last = null;
+    var typeTimer = null;
+
+    function startsAt(i) {
+      var s = 0;
+      for (var k = 0; k < i; k++) { s += durations[k]; }
+      return s;
+    }
+
+    function typeQuery() {
+      if (typeTimer) { clearInterval(typeTimer); }
+      var n = 0;
+      query.textContent = '';
+      typeTimer = setInterval(function () {
+        n++;
+        query.textContent = QUERY.slice(0, n);
+        if (n >= QUERY.length) { clearInterval(typeTimer); typeTimer = null; }
+      }, 110);
+    }
+
+    function show(i) {
+      if (i === current) { return; }
+      current = i;
+      scenes.forEach(function (sc, k) {
+        sc.classList.remove('is-active');
+        if (k === i) {
+          void sc.offsetWidth;
+          sc.classList.add('is-active');
+        }
+      });
+      friseBtns.forEach(function (b, k) {
+        b.setAttribute('aria-current', k === i ? 'true' : 'false');
+      });
+      if (i === 4) { typeQuery(); } else { query.textContent = QUERY; }
+    }
+
+    function render() {
+      var t = elapsed % total;
+      var acc = 0;
+      var idx = 0;
+      for (var k = 0; k < durations.length; k++) {
+        acc += durations[k];
+        if (t < acc) { idx = k; break; }
+        idx = k;
+      }
+      show(idx);
+      bar.style.width = (t / total * 100).toFixed(2) + '%';
+      clock.textContent = Math.floor(t / 1000) + ' / ' + Math.round(total / 1000) + ' s';
+    }
+
+    function frame(now) {
+      if (last === null) { last = now; }
+      var dt = now - last;
+      last = now;
+      if (playing) {
+        elapsed = (elapsed + dt) % total;
+        render();
+      }
+      requestAnimationFrame(frame);
+    }
+
+    toggle.addEventListener('click', function () {
+      playing = !playing;
+      toggle.textContent = playing ? 'Pause' : 'Reprendre';
+    });
+
+    restart.addEventListener('click', function () {
+      elapsed = 0;
+      current = -1;
+      playing = true;
+      toggle.textContent = 'Pause';
+      render();
+    });
+
+    friseBtns.forEach(function (b) {
+      b.addEventListener('click', function () {
+        var i = parseInt(b.getAttribute('data-go'), 10);
+        elapsed = startsAt(i);
+        current = -1;
+        playing = true;
+        toggle.textContent = 'Pause';
+        render();
+      });
+    });
+
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce) {
+      playing = false;
+      toggle.textContent = 'Lancer l’animation';
+      query.textContent = QUERY;
+    }
+
+    render();
+    requestAnimationFrame(frame);
+  })();
+</script>
+</body>
+</html>
